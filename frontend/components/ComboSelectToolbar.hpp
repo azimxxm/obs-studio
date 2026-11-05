@@ -17,6 +17,10 @@ public:
 	~ComboSelectToolbar();
 	virtual void Init();
 
+protected:
+	bool eventFilter(QObject *watched, QEvent *event) override;
+	void RefreshList();
+
 public slots:
 	void on_device_currentIndexChanged(int idx);
 };

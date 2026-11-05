@@ -4,6 +4,8 @@
 #include <OBSApp.hpp>
 #include <qt-wrappers.hpp>
 
+#include <QEvent>
+
 #include "moc_ComboSelectToolbar.cpp"
 
 ComboSelectToolbar::ComboSelectToolbar(QWidget *parent, OBSSource source)
@@ -79,6 +81,31 @@ void ComboSelectToolbar::Init()
 	}
 
 	UpdateSourceComboToolbarProperties(ui->device, source, props, prop_name, is_int);
+	ui->device->installEventFilter(this);
+}
+
+/* Devices plugged in after the toolbar was made are missing from the list,
+ * so ask the source for a fresh list right before it opens. */
+void ComboSelectToolbar::RefreshList()
+{
+	OBSSource source = GetSource();
+	if (!source) {
+		return;
+	}
+
+	props = obs_source_properties(source);
+	ui->device->blockSignals(true);
+	ui->device->clear();
+	ui->device->blockSignals(false);
+	UpdateSourceComboToolbarProperties(ui->device, source, props, prop_name, is_int);
+}
+
+bool ComboSelectToolbar::eventFilter(QObject *watched, QEvent *event)
+{
+	if (watched == ui->device && event->type() == QEvent::MouseButtonPress) {
+		RefreshList();
+	}
+	return SourceToolbar::eventFilter(watched, event);
 }
 
 void UpdateSourceComboToolbarValue(QComboBox *combo, OBSSource source, int idx, const char *prop_name, bool is_int)
