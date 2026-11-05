@@ -8,6 +8,7 @@
 #include <components/NarratorSession.hpp>
 #include <components/TakesPanel.hpp>
 #include <components/Teleprompter.hpp>
+#include <utility/AudioFilterOrder.hpp>
 
 #include <QShortcut>
 #include <QSplitter>
@@ -60,6 +61,12 @@ void OBSBasic::SelectAudioOnlyMicrophone()
 		if (micButton) {
 			micButton->SetSource(obs_sceneitem_get_source(micItem));
 		}
+		if (!audioFilterOrder) {
+			audioFilterOrder = new AudioFilterOrder(this);
+			connect(audioFilterOrder, &AudioFilterOrder::Notice, this, &OBSBasic::ShowStatusBarMessage);
+		}
+		/* audio mode keeps the voice chain in order; video mode leaves filters alone */
+		audioFilterOrder->Attach(obs_sceneitem_get_source(micItem));
 	}
 }
 
@@ -237,6 +244,9 @@ void OBSBasic::MoveMicrophoneBar(bool intoTeleprompter)
 
 	if (teleprompter) {
 		teleprompter->SetToolbarAccessory(nullptr);
+	}
+	if (audioFilterOrder) {
+		audioFilterOrder->Attach(nullptr);
 	}
 	if (micButton) {
 		micButton->hide();

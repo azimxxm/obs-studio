@@ -189,6 +189,7 @@ class Teleprompter;
 class TakesPanel;
 class NarratorSession;
 class MicrophoneButton;
+class AudioFilterOrder;
 class QShortcut;
 class QSplitter;
 class OBSBasic : public OBSMainWindow {
@@ -1013,6 +1014,7 @@ private:
 	QPointer<NarratorSession> narrator;
 	QPointer<QSplitter> audioOnlySplitter;
 	QPointer<MicrophoneButton> micButton;
+	QPointer<AudioFilterOrder> audioFilterOrder;
 	void MoveMicrophoneBar(bool intoTeleprompter);
 	QList<QShortcut *> audioOnlyShortcuts;
 

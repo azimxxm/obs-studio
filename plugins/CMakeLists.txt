@@ -89,6 +89,7 @@ check_obs_browser()
 
 add_core_module(obs-ffmpeg)
 add_core_module(obs-filters)
+add_core_module(narrator-filters)
 add_core_module(obs-libfdk)
 add_core_module(obs-nvenc PLATFORMS WINDOWS LINUX)
 add_core_module(obs-outputs)

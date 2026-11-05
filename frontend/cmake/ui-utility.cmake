@@ -59,6 +59,8 @@ target_sources(
     utility/SimpleOutput.hpp
     utility/AudioExport.cpp
     utility/AudioExport.hpp
+    utility/AudioFilterOrder.cpp
+    utility/AudioFilterOrder.hpp
     utility/VoiceEffects.cpp
     utility/VoiceEffects.hpp
     utility/StartMultiTrackVideoStreamingGuard.hpp

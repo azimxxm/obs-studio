@@ -17,6 +17,10 @@
 
 #include "OBSBasicFilters.hpp"
 
+#include <utility/AudioFilterOrder.hpp>
+
+#include <QTimer>
+
 #include <components/VisibilityItemDelegate.hpp>
 #include <components/VisibilityItemWidget.hpp>
 #include <dialogs/NameDialog.hpp>
@@ -58,6 +62,22 @@ OBSBasicFilters::OBSBasicFilters(QWidget *parent, OBSSource source_)
 	setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
 	ui->setupUi(this);
+
+	/* narrator mode: one click puts the voice filters back in the right order */
+	if (main->IsAudioOnlyMode()) {
+		auto *autoOrder = new QPushButton(QTStr("Filters.AutoOrder"), ui->widget);
+		autoOrder->setToolTip(QTStr("Filters.AutoOrderTip"));
+		ui->horizontalLayout_4->insertWidget(ui->horizontalLayout_4->indexOf(ui->moveAsyncFilterDown) + 1,
+						     autoOrder);
+		connect(autoOrder, &QPushButton::clicked, this, [this]() { AudioFilterOrder::SortAll(source); });
+
+		/* yellow ⚠ next to filters that clash; cheap enough to just check twice a second */
+		auto *conflictCheck = new QTimer(this);
+		conflictCheck->setInterval(500);
+		connect(conflictCheck, &QTimer::timeout, this,
+			[this]() { AudioFilterOrder::ShowConflicts(source, ui->asyncFilters); });
+		conflictCheck->start();
+	}
 
 	ui->asyncFilters->setItemDelegate(new VisibilityItemDelegate(ui->asyncFilters));
 	ui->effectFilters->setItemDelegate(new VisibilityItemDelegate(ui->effectFilters));
