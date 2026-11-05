@@ -430,6 +430,9 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->simpleOutAdvanced,    CHECK_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutPreset,      COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutCustom,      EDIT_CHANGED,   OUTPUTS_CHANGED);
+	HookWidget(ui->simpleOutRecMode,     COMBO_CHANGED,  OUTPUTS_CHANGED);
+	HookWidget(ui->simpleOutRecAudioFormat, COMBO_CHANGED, OUTPUTS_CHANGED);
+	HookWidget(ui->simpleOutRecAudioChannels, COMBO_CHANGED, OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecQuality,  COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecEncoder,  COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecAEncoder, COMBO_CHANGED,  OUTPUTS_CHANGED);
@@ -751,6 +754,10 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	connect(ui->channelSetup, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::SurroundWarning);
 	connect(ui->channelSetup, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::SpeakerLayoutChanged);
 	connect(ui->lowLatencyBuffering, &QCheckBox::clicked, this, &OBSBasicSettings::LowLatencyBufferingChanged);
+	connect(ui->simpleOutRecMode, &QComboBox::currentIndexChanged, this,
+		&OBSBasicSettings::SimpleRecordingQualityChanged);
+	connect(ui->simpleOutRecAudioFormat, &QComboBox::currentIndexChanged, this,
+		&OBSBasicSettings::SimpleRecordingAudioHintChanged);
 	connect(ui->simpleOutRecQuality, &QComboBox::currentIndexChanged, this,
 		&OBSBasicSettings::SimpleRecordingQualityChanged);
 	connect(ui->simpleOutRecQuality, &QComboBox::currentIndexChanged, this,
@@ -1758,6 +1765,9 @@ void OBSBasicSettings::LoadSimpleOutputSettings()
 	const char *amdAV1Preset = config_get_string(main->Config(), "SimpleOutput", "AMDAV1Preset");
 	const char *custom = config_get_string(main->Config(), "SimpleOutput", "x264Settings");
 	const char *recQual = config_get_string(main->Config(), "SimpleOutput", "RecQuality");
+	const char *recMode = config_get_string(main->Config(), "SimpleOutput", "RecMode");
+	const char *recAudioFormat = config_get_string(main->Config(), "SimpleOutput", "RecAudioFormat");
+	const char *recAudioChannels = config_get_string(main->Config(), "SimpleOutput", "RecAudioChannels");
 	const char *recEnc = config_get_string(main->Config(), "SimpleOutput", "RecEncoder");
 	const char *recAudioEnc = config_get_string(main->Config(), "SimpleOutput", "RecAudioEncoder");
 	const char *muxCustom = config_get_string(main->Config(), "SimpleOutput", "MuxerCustom");
@@ -1809,6 +1819,15 @@ void OBSBasicSettings::LoadSimpleOutputSettings()
 		idx = 0;
 	}
 	ui->simpleOutRecQuality->setCurrentIndex(idx);
+
+	idx = ui->simpleOutRecMode->findData(QString(recMode));
+	ui->simpleOutRecMode->setCurrentIndex(idx == -1 ? 0 : idx);
+
+	idx = ui->simpleOutRecAudioFormat->findData(QString(recAudioFormat));
+	ui->simpleOutRecAudioFormat->setCurrentIndex(idx == -1 ? 0 : idx);
+
+	idx = ui->simpleOutRecAudioChannels->findData(QString(recAudioChannels));
+	ui->simpleOutRecAudioChannels->setCurrentIndex(idx == -1 ? 0 : idx);
 
 	idx = ui->simpleOutStrEncoder->findData(QString(streamEnc));
 	if (idx == -1) {
@@ -3510,6 +3529,9 @@ void OBSBasicSettings::SaveOutputSettings()
 	SaveCheckBox(ui->simpleOutAdvanced, "SimpleOutput", "UseAdvanced");
 	SaveComboData(ui->simpleOutPreset, "SimpleOutput", presetType);
 	SaveEdit(ui->simpleOutCustom, "SimpleOutput", "x264Settings");
+	SaveComboData(ui->simpleOutRecMode, "SimpleOutput", "RecMode");
+	SaveComboData(ui->simpleOutRecAudioFormat, "SimpleOutput", "RecAudioFormat");
+	SaveComboData(ui->simpleOutRecAudioChannels, "SimpleOutput", "RecAudioChannels");
 	SaveComboData(ui->simpleOutRecQuality, "SimpleOutput", "RecQuality");
 	SaveComboData(ui->simpleOutRecEncoder, "SimpleOutput", "RecEncoder");
 	SaveComboData(ui->simpleOutRecAEncoder, "SimpleOutput", "RecAudioEncoder");
@@ -4903,6 +4925,20 @@ void OBSBasicSettings::FillSimpleRecordingValues()
 	ADD_QUALITY("HQ");
 	ADD_QUALITY("Lossless");
 
+#define REC_STR(str) QTStr("Basic.Settings.Output.Simple." str)
+	ui->simpleOutRecMode->addItem(REC_STR("RecordingMode.Video"), QString("Video"));
+	ui->simpleOutRecMode->addItem(REC_STR("RecordingMode.Audio"), QString("Audio"));
+
+	/* Named by purpose, so users don't need to know codecs or bit depths */
+	ui->simpleOutRecAudioFormat->addItem(REC_STR("AudioFormat.WAV"), QString("wav"));
+	ui->simpleOutRecAudioFormat->addItem(REC_STR("AudioFormat.FLAC"), QString("flac"));
+	ui->simpleOutRecAudioFormat->addItem(REC_STR("AudioFormat.MP3"), QString("mp3"));
+	ui->simpleOutRecAudioFormat->addItem(REC_STR("AudioFormat.M4A"), QString("m4a"));
+
+	ui->simpleOutRecAudioChannels->addItem(REC_STR("AudioChannels.Mono"), QString("mono"));
+	ui->simpleOutRecAudioChannels->addItem(REC_STR("AudioChannels.Stereo"), QString("stereo"));
+#undef REC_STR
+
 	ui->simpleOutRecEncoder->addItem(ENCODER_STR("Software"), QString(SIMPLE_ENCODER_X264));
 	ui->simpleOutRecEncoder->addItem(ENCODER_STR("SoftwareLowCPU"), QString(SIMPLE_ENCODER_X264_LOWCPU));
 	if (EncoderAvailable("obs_qsv11")) {
@@ -4980,20 +5016,43 @@ void OBSBasicSettings::FillAudioMonitoringDevices()
 void OBSBasicSettings::SimpleRecordingQualityChanged()
 {
 	QString qual = ui->simpleOutRecQuality->currentData().toString();
+	bool audioOnly = ui->simpleOutRecMode->currentData().toString() == "Audio";
 	bool streamQuality = qual == "Stream";
 	bool losslessQuality = !streamQuality && qual == "Lossless";
 
-	bool showEncoder = !streamQuality && !losslessQuality;
+	bool showEncoder = !audioOnly && !streamQuality && !losslessQuality;
 	ui->simpleOutRecEncoder->setVisible(showEncoder);
 	ui->simpleOutRecEncoderLabel->setVisible(showEncoder);
 	ui->simpleOutRecAEncoder->setVisible(showEncoder);
 	ui->simpleOutRecAEncoderLabel->setVisible(showEncoder);
-	ui->simpleOutRecFormat->setVisible(!losslessQuality);
-	ui->simpleOutRecFormatLabel->setVisible(!losslessQuality);
+	ui->simpleOutRecFormat->setVisible(!audioOnly && !losslessQuality);
+	ui->simpleOutRecFormatLabel->setVisible(!audioOnly && !losslessQuality);
+
+	/* Audio-only mode replaces all video related options with two simple choices */
+	ui->simpleOutRecQuality->setVisible(!audioOnly);
+	ui->label_26->setVisible(!audioOnly);
+	ui->simpleOutMuxCustom->setVisible(!audioOnly);
+	ui->label_420->setVisible(!audioOnly);
+	ui->simpleReplayBuf->setVisible(!audioOnly);
+	ui->simpleOutRecAudioFormat->setVisible(audioOnly);
+	ui->simpleOutRecAudioFormatLabel->setVisible(audioOnly);
+	ui->simpleOutRecAudioChannels->setVisible(audioOnly);
+	ui->simpleOutRecAudioChannelsLabel->setVisible(audioOnly);
+	ui->simpleOutRecAudioHint->setVisible(audioOnly);
+	SimpleRecordingAudioHintChanged();
 
 	UpdateMultitrackVideo();
 	SimpleRecordingEncoderChanged();
 	SimpleReplayBufferChanged();
+}
+
+void OBSBasicSettings::SimpleRecordingAudioHintChanged()
+{
+	QString format = ui->simpleOutRecAudioFormat->currentData().toString();
+	if (format.isEmpty()) {
+		format = "wav";
+	}
+	ui->simpleOutRecAudioHint->setText(QTStr(("Basic.Settings.Output.Simple.AudioFormat.Hint." + format).toUtf8().constData()));
 }
 
 extern const char *get_simple_output_encoder(const char *encoder);
@@ -5103,8 +5162,9 @@ void OBSBasicSettings::UpdateAutomaticReplayBufferCheckboxes()
 	switch (ui->outputMode->currentIndex()) {
 	case 0: {
 		const bool lossless = ui->simpleOutRecQuality->currentData().toString() == "Lossless";
-		state = ui->simpleReplayBuf->isChecked();
-		ui->simpleReplayBuf->setEnabled(!obs_frontend_replay_buffer_active() && !lossless);
+		const bool audioOnly = ui->simpleOutRecMode->currentData().toString() == "Audio";
+		state = ui->simpleReplayBuf->isChecked() && !audioOnly;
+		ui->simpleReplayBuf->setEnabled(!obs_frontend_replay_buffer_active() && !lossless && !audioOnly);
 		break;
 	}
 	case 1: {

@@ -62,6 +62,55 @@ void SimpleOutput::LoadRecordingPreset_Lossless()
 	obs_output_update(fileOutput, settings);
 }
 
+struct AudioOnlyPreset {
+	const char *key;
+	const char *formatName;
+	const char *audioEncoder;
+	const char *extension;
+	int bitrate; // kbps, ignored by lossless encoders
+};
+
+/* Presets are picked for compatibility: every one of these imports into common
+ * editors (Premiere, Resolve, Final Cut, Audition, Audacity) without plugins. */
+static const AudioOnlyPreset audioOnlyPresets[] = {
+	{"wav", "wav", "pcm_s24le", "wav", 0},
+	{"flac", "flac", "flac", "flac", 0},
+	{"mp3", "mp3", "libmp3lame", "mp3", 320},
+	{"m4a", "ipod", "aac", "m4a", 256},
+};
+
+static const AudioOnlyPreset &GetAudioOnlyPreset(const char *key)
+{
+	for (const AudioOnlyPreset &preset : audioOnlyPresets) {
+		if (key && strcmp(key, preset.key) == 0) {
+			return preset;
+		}
+	}
+	return audioOnlyPresets[0];
+}
+
+void SimpleOutput::LoadRecordingPreset_AudioOnly()
+{
+	const char *formatKey = config_get_string(main->Config(), "SimpleOutput", "RecAudioFormat");
+	const char *channels = config_get_string(main->Config(), "SimpleOutput", "RecAudioChannels");
+	const AudioOnlyPreset &preset = GetAudioOnlyPreset(formatKey);
+
+	fileOutput = obs_output_create("ffmpeg_output", "simple_audio_output", nullptr, nullptr);
+	if (!fileOutput) {
+		throw "Failed to create audio-only recording output "
+		      "(simple output)";
+	}
+
+	OBSDataAutoRelease settings = obs_data_create();
+	obs_data_set_string(settings, "format_name", preset.formatName);
+	obs_data_set_string(settings, "audio_encoder", preset.audioEncoder);
+	obs_data_set_int(settings, "audio_bitrate", preset.bitrate);
+	obs_data_set_bool(settings, "audio_mono", channels && strcmp(channels, "mono") == 0);
+	obs_output_update(fileOutput, settings);
+
+	audioOnlyExt = preset.extension;
+}
+
 void SimpleOutput::LoadRecordingPreset_Lossy(const char *encoderId)
 {
 	videoRecording = obs_video_encoder_create(encoderId, "simple_video_recording", nullptr, nullptr);
@@ -131,11 +180,20 @@ void SimpleOutput::LoadRecordingPreset()
 	const char *encoder = config_get_string(main->Config(), "SimpleOutput", "RecEncoder");
 	const char *audio_encoder = config_get_string(main->Config(), "SimpleOutput", "RecAudioEncoder");
 
+	const char *recMode = config_get_string(main->Config(), "SimpleOutput", "RecMode");
+
 	videoEncoder = encoder;
 	videoQuality = quality;
 	ffmpegOutput = false;
+	audioOnly = recMode && strcmp(recMode, "Audio") == 0;
 
-	if (strcmp(quality, "Stream") == 0) {
+	if (audioOnly) {
+		LoadRecordingPreset_AudioOnly();
+		usingRecordingPreset = true;
+		ffmpegOutput = true;
+		return;
+
+	} else if (strcmp(quality, "Stream") == 0) {
 		videoRecording = videoStreaming;
 		audioRecording = audioStreaming;
 		usingRecordingPreset = false;
@@ -855,12 +913,21 @@ bool SimpleOutput::ConfigureRecording(bool updateReplayBuffer)
 		obs_data_set_int(settings, "max_size_mb", usingRecordingPreset ? rbSize : 0);
 	} else {
 		f = GetFormatString(filenameFormat, nullptr, nullptr);
-		string strPath = GetRecordingFilename(path, ffmpegOutput ? "avi" : format, noSpace, overwriteIfExists,
-						      f.c_str(), ffmpegOutput);
+		const char *ext = audioOnly ? audioOnlyExt.c_str() : (ffmpegOutput ? "avi" : format);
+		string strPath = GetRecordingFilename(path, ext, noSpace, overwriteIfExists, f.c_str(), ffmpegOutput);
 		obs_data_set_string(settings, ffmpegOutput ? "url" : "path", strPath.c_str());
-		if (ffmpegOutput) {
+		if (audioOnly) {
+			/* Audio containers like wav only hold one stream, so use the first selected track */
+			obs_output_set_mixers(fileOutput, tracks ? (tracks & -tracks) : 1);
+		} else if (ffmpegOutput) {
 			obs_output_set_mixers(fileOutput, tracks);
 		}
+	}
+
+	if (audioOnly && !updateReplayBuffer) {
+		obs_data_set_string(settings, "muxer_settings", "");
+		obs_output_update(fileOutput, settings);
+		return true;
 	}
 
 	// Use fragmented MOV/MP4 if user has not already specified custom movflags

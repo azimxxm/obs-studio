@@ -36,6 +36,19 @@ constexpr int kDeprecatedRole = Qt::UserRole + 2;
 constexpr QStringView kRecentTypeId = u"_recent";
 constexpr int kRecentListLimit = 16;
 
+/* Source types that only produce audio, e.g. microphones and desktop audio */
+static bool IsAudioOnlyType(const char *type)
+{
+	uint32_t caps = obs_get_source_output_flags(type);
+	return (caps & OBS_SOURCE_AUDIO) != 0 && (caps & OBS_SOURCE_VIDEO) == 0;
+}
+
+static bool IsAudioOnlySourceList()
+{
+	OBSBasic *main = qobject_cast<OBSBasic *>(App()->GetMainWindow());
+	return main && main->IsAudioOnlyMode();
+}
+
 struct AddSourceData {
 	// Input data
 	obs_source_t *source;
@@ -421,6 +434,11 @@ void OBSBasicSourceSelect::updateExistingSources(int limit)
 					     return false;
 				     }
 
+				     // In audio-only mode only show sources that make sound
+				     if (IsAudioOnlySourceList() && !IsAudioOnlyType(obs_source_get_id(source))) {
+					     return false;
+				     }
+
 				     return true;
 			     }
 
@@ -495,6 +513,7 @@ void OBSBasicSourceSelect::rebuildSourceTypeList()
 	ui->sourceTypeList->clear();
 
 	OBSBasic *main = qobject_cast<OBSBasic *>(App()->GetMainWindow());
+	bool audioOnly = IsAudioOnlySourceList();
 
 	const char *unversioned_type;
 	const char *type;
@@ -506,6 +525,11 @@ void OBSBasicSourceSelect::rebuildSourceTypeList()
 		uint32_t caps = obs_get_source_output_flags(type);
 
 		if ((caps & OBS_SOURCE_CAP_DISABLED) != 0) {
+			continue;
+		}
+
+		/* A narrator only needs microphones and desktop audio */
+		if (audioOnly && (!IsAudioOnlyType(type) || (caps & OBS_SOURCE_DEPRECATED) != 0)) {
 			continue;
 		}
 
@@ -524,21 +548,25 @@ void OBSBasicSourceSelect::rebuildSourceTypeList()
 		}
 	}
 
-	QListWidgetItem *newItem = new QListWidgetItem(ui->sourceTypeList);
-	newItem->setData(Qt::DisplayRole, Str("Basic.Scene"));
-	newItem->setData(kUnversionedIdRole, "scene");
+	if (!audioOnly) {
+		QListWidgetItem *newItem = new QListWidgetItem(ui->sourceTypeList);
+		newItem->setData(Qt::DisplayRole, Str("Basic.Scene"));
+		newItem->setData(kUnversionedIdRole, "scene");
 
-	QIcon icon = main->GetSceneIcon();
-	newItem->setIcon(icon);
+		QIcon icon = main->GetSceneIcon();
+		newItem->setIcon(icon);
+	}
 
 	ui->sourceTypeList->sortItems();
 
-	auto *deprecatedTitle = new QListWidgetItem(ui->sourceTypeList);
-	deprecatedTitle->setText(QTStr("Deprecated"));
-	deprecatedTitle->setFlags(deprecatedTitle->flags() & ~Qt::ItemIsEnabled);
-	deprecatedTitle->setFlags(deprecatedTitle->flags() & ~Qt::ItemIsSelectable);
+	if (!audioOnly) {
+		auto *deprecatedTitle = new QListWidgetItem(ui->sourceTypeList);
+		deprecatedTitle->setText(QTStr("Deprecated"));
+		deprecatedTitle->setFlags(deprecatedTitle->flags() & ~Qt::ItemIsEnabled);
+		deprecatedTitle->setFlags(deprecatedTitle->flags() & ~Qt::ItemIsSelectable);
 
-	ui->sourceTypeList->addItem(deprecatedTitle);
+		ui->sourceTypeList->addItem(deprecatedTitle);
+	}
 
 	// Shift Deprecated sources to the bottom
 	QList<QListWidgetItem *> deprecatedItems;

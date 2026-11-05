@@ -638,6 +638,9 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_string(activeConfiguration, "SimpleOutput", "Preset", "veryfast");
 	config_set_default_string(activeConfiguration, "SimpleOutput", "NVENCPreset2", "p5");
 	config_set_default_string(activeConfiguration, "SimpleOutput", "RecQuality", "Stream");
+	config_set_default_string(activeConfiguration, "SimpleOutput", "RecMode", "Video");
+	config_set_default_string(activeConfiguration, "SimpleOutput", "RecAudioFormat", "wav");
+	config_set_default_string(activeConfiguration, "SimpleOutput", "RecAudioChannels", "mono");
 	config_set_default_bool(activeConfiguration, "SimpleOutput", "RecRB", false);
 	config_set_default_int(activeConfiguration, "SimpleOutput", "RecRBTime", 20);
 	config_set_default_int(activeConfiguration, "SimpleOutput", "RecRBSize", 512);
@@ -1238,6 +1241,7 @@ void OBSBasic::OBSInit()
 	}
 
 	UpdatePreviewProgramIndicators();
+	UpdateAudioOnlyLayout();
 	OnFirstLoad();
 
 	if (!hideWindowOnStart) {

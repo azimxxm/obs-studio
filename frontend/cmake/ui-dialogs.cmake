@@ -19,6 +19,8 @@ target_sources(
     dialogs/NameDialog.hpp
     dialogs/OAuthLogin.cpp
     dialogs/OAuthLogin.hpp
+    dialogs/AudioEditor.cpp
+    dialogs/AudioEditor.hpp
     dialogs/OBSAbout.cpp
     dialogs/OBSAbout.hpp
     dialogs/OBSBasicAdvAudio.cpp

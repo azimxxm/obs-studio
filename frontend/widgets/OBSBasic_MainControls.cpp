@@ -219,6 +219,7 @@ void OBSBasic::on_action_Settings_triggered()
 	}
 
 	settings_already_executing = false;
+	UpdateAudioOnlyLayout();
 
 	if (restart) {
 		QMessageBox::StandardButton button =

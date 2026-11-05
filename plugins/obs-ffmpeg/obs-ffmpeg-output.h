@@ -27,6 +27,7 @@ struct ffmpeg_cfg {
 	const char *audio_settings;
 	int audio_mix_count;
 	int audio_tracks;
+	bool audio_mono; // downmix all audio to one channel
 	const char *audio_stream_names[MAX_AUDIO_MIXES];
 	enum AVPixelFormat format;
 	enum AVColorRange color_range;

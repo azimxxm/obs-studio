@@ -15,6 +15,11 @@ class OBSBasicControls : public QFrame {
 
 	std::unique_ptr<Ui::OBSBasicControls> ui;
 
+	bool audioOnly = false;
+	bool broadcastFlowEnabled = false;
+	bool replayBufferEnabled = false;
+	bool virtualCamEnabled = false;
+
 	QScopedPointer<QMenu> streamButtonMenu;
 	QPointer<QAction> startStreamAction;
 	QPointer<QAction> stopStreamAction;
@@ -48,6 +53,9 @@ private slots:
 	void EnableBroadcastFlow(bool enabled);
 	void EnableReplayBufferButtons(bool enabled);
 	void EnableVirtualCamButtons();
+
+	void SetAudioOnlyMode(bool enabled);
+	void UpdateButtonVisibility();
 
 public:
 	OBSBasicControls(OBSBasic *main);

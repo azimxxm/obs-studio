@@ -22,6 +22,8 @@ target_sources(
     components/ApplicationAudioCaptureToolbar.hpp
     components/AudioCaptureToolbar.cpp
     components/AudioCaptureToolbar.hpp
+    components/AudioTimeline.cpp
+    components/AudioTimeline.hpp
     components/BalanceSlider.hpp
     components/BrowserToolbar.cpp
     components/BrowserToolbar.hpp
@@ -95,6 +97,12 @@ target_sources(
     components/VolumeAccessibleInterface.hpp
     components/VolumeControl.cpp
     components/VolumeControl.hpp
+    components/TakesPanel.cpp
+    components/TakesPanel.hpp
+    components/Teleprompter.cpp
+    components/Teleprompter.hpp
+    components/WaveformView.cpp
+    components/WaveformView.hpp
     components/VolumeMeter.cpp
     components/VolumeMeter.hpp
     components/VolumeName.cpp

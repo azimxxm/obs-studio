@@ -185,6 +185,10 @@ static inline void ClearProcessPriority()
 	} while (false)
 #endif
 
+class Teleprompter;
+class TakesPanel;
+class QShortcut;
+class QSplitter;
 class OBSBasic : public OBSMainWindow {
 	Q_OBJECT
 	Q_PROPERTY(QIcon imageIcon READ GetImageIcon WRITE SetImageIcon DESIGNABLE true)
@@ -1001,9 +1005,20 @@ private:
 	bool recordingStarted = false;
 	bool isRecordingPausable = false;
 	bool recordingPaused = false;
+	bool audioOnlyLayoutActive = false;
+	QPointer<Teleprompter> teleprompter;
+	QPointer<TakesPanel> takesPanel;
+	QPointer<QSplitter> audioOnlySplitter;
+	QList<QShortcut *> audioOnlyShortcuts;
 
 	void AutoRemux(QString input, bool no_show = false);
 	void UpdateIsRecordingPausable();
+	void SelectAudioOnlyMicrophone();
+	void ApplyAudioOnlyDocks(bool audioOnly);
+	void ApplyAudioOnlyCentralArea(bool audioOnly);
+	void CreateAudioOnlyWorkspace(QBoxLayout *centralLayout);
+	void CreateAudioOnlyShortcuts();
+	void ToggleRecordingFromShortcut();
 
 	bool LowDiskSpace();
 	void DiskSpaceMessage();
@@ -1033,6 +1048,9 @@ public slots:
 
 	bool RecordingActive();
 
+	bool IsAudioOnlyMode();
+	void UpdateAudioOnlyLayout();
+
 signals:
 	/* Recording signals */
 	void RecordingStarted(bool pausable = false);
@@ -1040,6 +1058,7 @@ signals:
 	void RecordingUnpaused();
 	void RecordingStopping();
 	void RecordingStopped();
+	void AudioOnlyModeChanged(bool audioOnly);
 
 	/* -------------------------------------
 	 * MARK: - OBSBasic_ReplayBuffer

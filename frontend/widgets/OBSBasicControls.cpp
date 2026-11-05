@@ -95,6 +95,7 @@ OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui:
 	connect(main, &OBSBasic::BroadcastFlowEnabled, this, &OBSBasicControls::EnableBroadcastFlow);
 	connect(main, &OBSBasic::ReplayBufEnabled, this, &OBSBasicControls::EnableReplayBufferButtons);
 	connect(main, &OBSBasic::VirtualCamEnabled, this, &OBSBasicControls::EnableVirtualCamButtons);
+	connect(main, &OBSBasic::AudioOnlyModeChanged, this, &OBSBasicControls::SetAudioOnlyMode);
 }
 
 void OBSBasicControls::StreamingPreparing()
@@ -263,7 +264,8 @@ void OBSBasicControls::UpdateStudioModeState(bool enabled)
 
 void OBSBasicControls::EnableBroadcastFlow(bool enabled)
 {
-	ui->broadcastButton->setVisible(enabled);
+	broadcastFlowEnabled = enabled;
+	ui->broadcastButton->setVisible(enabled && !audioOnly);
 	ui->broadcastButton->setEnabled(enabled);
 
 	ui->broadcastButton->setText(QTStr("Basic.Main.SetupBroadcast"));
@@ -275,11 +277,55 @@ void OBSBasicControls::EnableBroadcastFlow(bool enabled)
 
 void OBSBasicControls::EnableReplayBufferButtons(bool enabled)
 {
-	ui->replayBufferButton->setVisible(enabled);
+	replayBufferEnabled = enabled;
+	ui->replayBufferButton->setVisible(enabled && !audioOnly);
 }
 
 void OBSBasicControls::EnableVirtualCamButtons()
 {
-	ui->virtualCamButton->setVisible(true);
-	ui->virtualCamConfigButton->setVisible(true);
+	virtualCamEnabled = true;
+	UpdateButtonVisibility();
+}
+
+/* Big red Record button: it is the one action a narrator really needs */
+static constexpr const char *kAudioOnlyRecordStyle = R"(
+QPushButton#recordButton {
+	min-height: 64px;
+	font-size: 18px;
+	font-weight: 600;
+	color: #ffffff;
+	background-color: #c62828;
+	border: none;
+	border-radius: 8px;
+}
+QPushButton#recordButton:hover {
+	background-color: #d63a3a;
+}
+QPushButton#recordButton[class~="state-active"] {
+	background-color: #1e1f25;
+	border: 3px solid #e5484d;
+}
+)";
+
+void OBSBasicControls::SetAudioOnlyMode(bool enabled)
+{
+	audioOnly = enabled;
+	ui->recordButton->setStyleSheet(enabled ? kAudioOnlyRecordStyle : "");
+	ui->recordButton->setMinimumHeight(enabled ? 64 : 0);
+	ui->pauseRecordButton->setMinimumHeight(enabled ? 44 : 0);
+	/* Give the Record button room so it doesn't touch Settings */
+	ui->buttonsVLayout->setSpacing(enabled ? 10 : 0);
+	ui->verticalLayout_9->setSpacing(enabled ? 10 : 0);
+	UpdateButtonVisibility();
+}
+
+/* In audio-only mode only Record (with Pause) and Settings stay visible */
+void OBSBasicControls::UpdateButtonVisibility()
+{
+	ui->streamButton->setVisible(!audioOnly);
+	ui->broadcastButton->setVisible(broadcastFlowEnabled && !audioOnly);
+	ui->replayBufferButton->setVisible(replayBufferEnabled && !audioOnly);
+	ui->virtualCamButton->setVisible(virtualCamEnabled && !audioOnly);
+	ui->virtualCamConfigButton->setVisible(virtualCamEnabled && !audioOnly);
+	ui->modeSwitch->setVisible(!audioOnly);
 }

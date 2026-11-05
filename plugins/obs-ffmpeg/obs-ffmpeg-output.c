@@ -322,11 +322,14 @@ static bool create_audio_stream(struct ffmpeg_data *data, int idx)
 	context = avcodec_alloc_context3(data->acodec);
 	context->bit_rate = (int64_t)data->config.audio_bitrate * 1000;
 	context->time_base = (AVRational){1, aoi.samples_per_sec};
-	channels = get_audio_channels(aoi.speakers);
+
+	/* libobs downmixes for us when a mono conversion is requested */
+	enum speaker_layout speakers = data->config.audio_mono ? SPEAKERS_MONO : aoi.speakers;
+	channels = get_audio_channels(speakers);
 
 	context->sample_rate = aoi.samples_per_sec;
 	av_channel_layout_default(&context->ch_layout, channels);
-	if (aoi.speakers == SPEAKERS_4POINT1)
+	if (speakers == SPEAKERS_4POINT1)
 		context->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_4POINT1;
 
 	avcodec_get_supported_config(context, data->acodec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0,
@@ -338,8 +341,8 @@ static bool create_audio_stream(struct ffmpeg_data *data, int idx)
 
 	data->audio_samplerate = aoi.samples_per_sec;
 	data->audio_format = convert_ffmpeg_sample_format(context->sample_fmt);
-	data->audio_planes = get_audio_planes(data->audio_format, aoi.speakers);
-	data->audio_size = get_audio_size(data->audio_format, aoi.speakers, 1);
+	data->audio_planes = get_audio_planes(data->audio_format, speakers);
+	data->audio_size = get_audio_size(data->audio_format, speakers, 1);
 
 	if (data->output->oformat->flags & AVFMT_GLOBALHEADER)
 		context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -357,7 +360,13 @@ static inline bool init_streams(struct ffmpeg_data *data)
 {
 	const AVOutputFormat *format = data->output->oformat;
 
-	if (format->video_codec != AV_CODEC_ID_NONE)
+	/* No encoder name and no codec ID means video was disabled by the user.
+	 * Some audio containers (mp3, flac) still report a default video codec
+	 * for cover art, so check this explicitly. */
+	bool video_disabled = (!data->config.video_encoder || !*data->config.video_encoder) &&
+			      data->config.video_encoder_id == 0;
+
+	if (format->video_codec != AV_CODEC_ID_NONE && !video_disabled)
 		if (!create_video_stream(data))
 			return false;
 
@@ -957,6 +966,7 @@ static bool try_connect(struct ffmpeg_output *output)
 	config.muxer_settings = obs_data_get_string(settings, "muxer_settings");
 	config.video_bitrate = (int)obs_data_get_int(settings, "video_bitrate");
 	config.audio_bitrate = (int)obs_data_get_int(settings, "audio_bitrate");
+	config.audio_mono = obs_data_get_bool(settings, "audio_mono");
 	config.gop_size = (int)obs_data_get_int(settings, "gop_size");
 	config.video_encoder = get_string_or_null(settings, "video_encoder");
 	config.video_encoder_id = (int)obs_data_get_int(settings, "video_encoder_id");
@@ -1042,7 +1052,10 @@ static bool try_connect(struct ffmpeg_output *output)
 		return false;
 	}
 
-	struct audio_convert_info aci = {.format = output->ff_data.audio_format};
+	struct audio_convert_info aci = {
+		.format = output->ff_data.audio_format,
+		.speakers = config.audio_mono ? SPEAKERS_MONO : SPEAKERS_UNKNOWN,
+	};
 
 	output->active = true;
 

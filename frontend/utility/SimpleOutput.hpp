@@ -16,6 +16,8 @@ struct SimpleOutput : BasicOutputHandler {
 	bool recordingConfigured = false;
 	bool ffmpegOutput = false;
 	bool lowCPUx264 = false;
+	bool audioOnly = false;
+	std::string audioOnlyExt;
 
 	SimpleOutput(OBSBasic *main_);
 
@@ -39,6 +41,7 @@ struct SimpleOutput : BasicOutputHandler {
 
 	void LoadRecordingPreset_Lossy(const char *encoder);
 	void LoadRecordingPreset_Lossless();
+	void LoadRecordingPreset_AudioOnly();
 	void LoadRecordingPreset();
 
 	void LoadStreamingPreset_Lossy(const char *encoder);

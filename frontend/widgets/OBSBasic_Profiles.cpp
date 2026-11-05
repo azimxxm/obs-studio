@@ -754,6 +754,7 @@ void OBSBasic::ResetProfileData()
 	service = nullptr;
 	InitService();
 	ResetOutputs();
+	UpdateAudioOnlyLayout();
 	ClearHotkeys();
 	CreateHotkeys();
 
