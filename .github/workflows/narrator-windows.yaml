@@ -1,0 +1,56 @@
+# Builds the Windows x64 installer of Narrator Studio and attaches it to the
+# GitHub release. The macOS .pkg is built on the developer's Mac, not here.
+name: Narrator Studio Windows
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach the installer to (e.g. v1.0.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    name: Windows x64 installer
+    runs-on: windows-2025-vs2026
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TAG }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Configure
+        run: cmake --preset windows-x64
+
+      - name: Build
+        run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel -- /consoleLoggerParameters:Summary /noLogo
+
+      - name: Install into a folder
+        run: cmake --install build_x64 --prefix build_x64/install --config RelWithDebInfo
+
+      - name: Make installer
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile fork-tools/windows/vc_redist.x64.exe
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          $env:NARRATOR_VERSION = $env:TAG.TrimStart('v')
+          & $iscc fork-tools/windows/narrator-studio.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$env:TAG" (Get-ChildItem fork-tools/windows/Output/*.exe).FullName --clobber

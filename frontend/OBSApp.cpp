@@ -45,6 +45,7 @@
 #endif
 
 #include <chrono>
+#include <filesystem>
 #include <sstream>
 
 #ifdef _WIN32
@@ -326,7 +327,12 @@ bool OBSApp::InitGlobalConfigDefaults()
 	config_set_default_uint(appConfig, "General", "MaxLogs", 10);
 	config_set_default_int(appConfig, "General", "InfoIncrement", -1);
 	config_set_default_string(appConfig, "General", "ProcessPriority", "Normal");
+#ifdef NARRATOR_CONFIG_DIR
+	/* the OBS updater would install the official OBS over Narrator Studio */
+	config_set_default_bool(appConfig, "General", "EnableAutoUpdates", false);
+#else
 	config_set_default_bool(appConfig, "General", "EnableAutoUpdates", true);
+#endif
 
 #if _WIN32
 	config_set_default_string(appConfig, "Video", "Renderer", "Direct3D 11");
@@ -1763,20 +1769,56 @@ vector<pair<string, string>> GetLocaleNames()
 #define ALLOW_PORTABLE_MODE 0
 #endif
 
+#ifdef NARRATOR_CONFIG_DIR
+/* Narrator Studio keeps its settings apart from the official OBS Studio:
+ * "obs-studio/..." becomes "narrator-studio/...". The first time, the OBS
+ * settings are copied over so nothing the user set up gets lost. */
+static std::string NarratorConfigName(const char *name)
+{
+	static const std::string obsPrefix = "obs-studio";
+	std::string mapped = name ? name : "";
+	if (mapped.compare(0, obsPrefix.size(), obsPrefix) == 0) {
+		mapped.replace(0, obsPrefix.size(), NARRATOR_CONFIG_DIR);
+	}
+
+	static bool migrated = false;
+	if (!migrated) {
+		migrated = true;
+		char oldDir[512], newDir[512];
+		if (os_get_config_path(oldDir, sizeof(oldDir), "obs-studio") > 0 &&
+		    os_get_config_path(newDir, sizeof(newDir), NARRATOR_CONFIG_DIR) > 0) {
+			std::error_code error;
+			if (!std::filesystem::exists(std::filesystem::u8path(newDir), error) &&
+			    std::filesystem::exists(std::filesystem::u8path(oldDir), error)) {
+				std::filesystem::copy(std::filesystem::u8path(oldDir), std::filesystem::u8path(newDir),
+						      std::filesystem::copy_options::recursive, error);
+				if (error) {
+					blog(LOG_WARNING, "Could not copy OBS settings: %s", error.message().c_str());
+				}
+			}
+		}
+	}
+	return mapped;
+}
+#define CONFIG_NAME(name) ((name) ? NarratorConfigName(name).c_str() : nullptr)
+#else
+#define CONFIG_NAME(name) (name)
+#endif
+
 int GetAppConfigPath(char *path, size_t size, const char *name)
 {
 #if ALLOW_PORTABLE_MODE
 	if (portable_mode) {
 		if (name && *name) {
-			return snprintf(path, size, CONFIG_PATH "/%s", name);
+			return snprintf(path, size, CONFIG_PATH "/%s", CONFIG_NAME(name));
 		} else {
 			return snprintf(path, size, CONFIG_PATH);
 		}
 	} else {
-		return os_get_config_path(path, size, name);
+		return os_get_config_path(path, size, CONFIG_NAME(name));
 	}
 #else
-	return os_get_config_path(path, size, name);
+	return os_get_config_path(path, size, CONFIG_NAME(name));
 #endif
 }
 
@@ -1786,16 +1828,16 @@ char *GetAppConfigPathPtr(const char *name)
 	if (portable_mode) {
 		char path[512];
 
-		if (snprintf(path, sizeof(path), CONFIG_PATH "/%s", name) > 0) {
+		if (snprintf(path, sizeof(path), CONFIG_PATH "/%s", CONFIG_NAME(name)) > 0) {
 			return bstrdup(path);
 		} else {
 			return NULL;
 		}
 	} else {
-		return os_get_config_path_ptr(name);
+		return os_get_config_path_ptr(CONFIG_NAME(name));
 	}
 #else
-	return os_get_config_path_ptr(name);
+	return os_get_config_path_ptr(CONFIG_NAME(name));
 #endif
 }
 

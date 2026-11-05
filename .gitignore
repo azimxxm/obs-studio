@@ -49,3 +49,7 @@ build-aux/flatpak-github-action-modified-*
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+
+# Windows installer build output
+fork-tools/windows/Output/
+fork-tools/windows/vc_redist.x64.exe
