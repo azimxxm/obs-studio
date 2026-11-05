@@ -32,11 +32,12 @@ jobs:
 
       - name: Configure
         run: |
-          # OBS reads its version from git tags and only understands "33.0.1"-style ones,
-          # so skip our own "v1.0.0" release tags
-          $obsVersion = git describe --always --tags --match '[0-9]*'
-          if (-not $obsVersion) { $obsVersion = '33.0.1' }
-          cmake --preset windows-x64 "-DOBS_VERSION_OVERRIDE=$obsVersion"
+          # OBS reads its version from "git describe" and only understands "33.0.1"-style
+          # tags. It also runs a second CMake for the 32-bit helpers, so instead of passing
+          # a version we drop our own "v1.0.0" tags from this checkout (GitHub keeps them).
+          git tag -l 'v*' | ForEach-Object { git tag -d $_ | Out-Null }
+          git describe --always --tags
+          cmake --preset windows-x64
 
       - name: Build
         run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel -- /consoleLoggerParameters:Summary /noLogo
