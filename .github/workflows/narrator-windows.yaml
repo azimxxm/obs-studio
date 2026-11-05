@@ -31,7 +31,12 @@ jobs:
           fetch-depth: 0
 
       - name: Configure
-        run: cmake --preset windows-x64
+        run: |
+          # OBS reads its version from git tags and only understands "33.0.1"-style ones,
+          # so skip our own "v1.0.0" release tags
+          $obsVersion = git describe --always --tags --match '[0-9]*'
+          if (-not $obsVersion) { $obsVersion = '33.0.1' }
+          cmake --preset windows-x64 "-DOBS_VERSION_OVERRIDE=$obsVersion"
 
       - name: Build
         run: cmake --build --preset windows-x64 --config RelWithDebInfo --parallel -- /consoleLoggerParameters:Summary /noLogo

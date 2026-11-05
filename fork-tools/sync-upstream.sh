@@ -45,7 +45,11 @@ rebuild() {
 
 	git submodule update --init --recursive
 	echo "==> Configuring"
-	cmake --preset macos > /dev/null
+	# OBS reads its version from git tags and only understands "33.0.1"-style ones,
+	# so our own "v1.0.0" release tags are skipped here
+	local obs_version
+	obs_version=$(git describe --always --tags --match '[0-9]*')
+	cmake --preset macos "-DOBS_VERSION_OVERRIDE=${obs_version}" > /dev/null
 	echo "==> Building (this takes a few minutes the first time)"
 	cmake --build "$BUILD_DIR" --config "$CONFIG" -- -quiet
 	echo "==> Build OK: $BUILD_DIR/frontend/$CONFIG/OBS.app"
