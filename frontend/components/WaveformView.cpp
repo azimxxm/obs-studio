@@ -24,6 +24,8 @@ const QColor kSelection(120, 160, 255, 70);
 const QColor kBoundary(255, 196, 80);
 const QColor kPlayhead(229, 72, 77);
 const QColor kRulerText(160, 160, 170);
+const QColor kRoomTone(255, 255, 255, 18);
+const QColor kMistake(255, 92, 92);
 
 QString FormatTime(double seconds, bool withTenths)
 {
@@ -177,6 +179,15 @@ void WaveformView::paintEvent(QPaintEvent *)
 	QRect wave(0, kRulerHeight, width(), height() - kRulerHeight);
 	DrawRuler(painter, ruler);
 
+	/* room tone recorded during the countdown, the noise profile for Studio cleaning */
+	for (const auto &range : timeline->RoomTone()) {
+		double x1 = XAtFrame(range.first);
+		double x2 = XAtFrame(range.second);
+		if (x2 >= 0 && x1 <= width()) {
+			painter.fillRect(QRectF(x1, wave.top(), x2 - x1, wave.height()), kRoomTone);
+		}
+	}
+
 	if (HasSelection()) {
 		double x1 = XAtFrame(selectionStart);
 		double x2 = XAtFrame(selectionEnd);
@@ -204,6 +215,17 @@ void WaveformView::paintEvent(QPaintEvent *)
 		if (x >= 0 && x <= width()) {
 			painter.drawLine(QPointF(x, wave.top()), QPointF(x, wave.bottom()));
 		}
+	}
+
+	/* where the narrator pressed M */
+	for (qint64 mark : timeline->Mistakes()) {
+		double x = XAtFrame(mark);
+		if (x < 0 || x > width()) {
+			continue;
+		}
+		painter.setPen(QPen(kMistake, 2));
+		painter.drawLine(QPointF(x, wave.top()), QPointF(x, wave.bottom()));
+		painter.drawText(QPointF(x + 4, wave.top() + 14), QStringLiteral("✖"));
 	}
 
 	painter.setPen(QPen(kWaveSelected, 1));

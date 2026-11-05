@@ -1,6 +1,7 @@
 #include "AudioEditor.hpp"
 
 #include <components/WaveformView.hpp>
+#include <utility/AudioExport.hpp>
 #include <utility/VoiceEffects.hpp>
 
 #include <OBSApp.hpp>
@@ -42,6 +43,9 @@ constexpr double kKeepPauseSec = 0.4;
 constexpr double kFadeSec = 1.0;
 /* gentle enough to keep the voice natural, see the measurements in VoiceEffects */
 constexpr float kStudioNoiseReductionDb = 15.0f;
+/* breaths stay a little audible, removing them fully sounds robotic */
+constexpr float kBreathReductionDb = 12.0f;
+constexpr float kDeEssMaxDb = 8.0f;
 constexpr double kDefaultLoudness = -14.0;
 constexpr const char *kConfigSection = "AudioEditor";
 
@@ -116,6 +120,10 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 	polishButton->setProperty("class", "btn-primary");
 	polishButton->setMinimumSize(190, 38);
 	polishButton->setToolTip(QTStr("AudioEditor.PolishTip"));
+	mistakesButton = new QPushButton(this);
+	mistakesButton->setMinimumHeight(38);
+	mistakesButton->setToolTip(QTStr("AudioEditor.MistakesTip"));
+	mistakesButton->setStyleSheet("QPushButton { color: #ff8a8a; font-weight: 600; }");
 	effectsButton = new QPushButton(QTStr("AudioEditor.Effects"), this);
 	effectsButton->setMinimumHeight(38);
 	effectsButton->setMenu(CreateEffectsMenu());
@@ -152,6 +160,7 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 
 	auto *bottom = new QHBoxLayout;
 	bottom->addWidget(polishButton);
+	bottom->addWidget(mistakesButton);
 	bottom->addWidget(effectsButton);
 	bottom->addWidget(compareButton);
 	bottom->addStretch();
@@ -182,8 +191,16 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 	connect(waveform, &WaveformView::ToolChanged, this, [this](WaveformView::Tool tool) {
 		(tool == WaveformView::Tool::Hand ? handToolButton : selectToolButton)->setChecked(true);
 	});
-	connect(exportButton, &QPushButton::clicked, this, &AudioEditor::Export);
+	/* one button, four ready-made targets: nobody needs to know formats or LUFS */
+	auto *exportMenu = new QMenu(this);
+	const char *presetNames[] = {"AudioEditor.ExportWav", "AudioEditor.ExportSocial", "AudioEditor.ExportPodcast",
+				     "AudioEditor.ExportAudiobook"};
+	for (int preset = 0; preset < 4; preset++) {
+		exportMenu->addAction(QTStr(presetNames[preset]), this, [this, preset]() { Export(preset); });
+	}
+	exportButton->setMenu(exportMenu);
 	connect(polishButton, &QPushButton::clicked, this, &AudioEditor::PolishVoice);
+	connect(mistakesButton, &QPushButton::clicked, this, &AudioEditor::RemoveMistakes);
 	connect(compareButton, &QPushButton::clicked, this, &AudioEditor::ToggleCompare);
 	connect(closeButton, &QPushButton::clicked, this, &AudioEditor::reject);
 	connect(playheadTimer, &QTimer::timeout, this, &AudioEditor::UpdatePlayhead);
@@ -211,7 +228,8 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 	connect(selectKey, &QShortcut::activated, this, [this]() { waveform->SetTool(WaveformView::Tool::Select); });
 	auto *selectAll = new QShortcut(QKeySequence::SelectAll, this);
 	connect(selectAll, &QShortcut::activated, waveform, &WaveformView::SelectAll);
-	addShortcut(QKeySequence::Save, &AudioEditor::Export);
+	auto *saveKey = new QShortcut(QKeySequence::Save, this);
+	connect(saveKey, &QShortcut::activated, this, [this]() { Export(0); });
 
 	for (QPushButton *button : findChildren<QPushButton *>()) {
 		/* keep Space for play/stop instead of clicking the focused button */
@@ -388,8 +406,9 @@ QMenu *AudioEditor::CreateEffectsMenu()
 	})->setEnabled(VoiceEffects::CanRemoveNoise());
 
 	menu->addAction(QTStr("AudioEditor.Fx.NoiseStudio"), this, [this]() {
-		RunEffect(QTStr("AudioEditor.Fx.NoiseStudio"), OnSelection([](std::vector<float> &s, int ch, auto &) {
-				  VoiceEffects::CleanNoiseSpectral(s, ch, kStudioNoiseReductionDb);
+		auto roomTone = RoomToneRanges();
+		RunEffect(QTStr("AudioEditor.Fx.NoiseStudio"), OnSelection([roomTone](std::vector<float> &s, int ch, auto &) {
+				  VoiceEffects::CleanNoiseSpectral(s, ch, kStudioNoiseReductionDb, roomTone);
 				  return true;
 			  }));
 	});
@@ -408,6 +427,27 @@ QMenu *AudioEditor::CreateEffectsMenu()
 				  VoiceEffects::NormalizeLoudness(s, ch, -20.0, kCeilingDb);
 				  VoiceEffects::Compress(s, ch, -26.0f, 3.0f, 5.0f, 120.0f);
 				  VoiceEffects::NormalizeLoudness(s, ch, target, kCeilingDb);
+				  return true;
+			  }));
+	});
+
+	menu->addAction(QTStr("AudioEditor.Fx.Breaths"), this, [this]() {
+		RunEffect(QTStr("AudioEditor.Fx.Breaths"), OnSelection([](std::vector<float> &s, int ch, auto &) {
+				  VoiceEffects::ReduceBreaths(s, ch, kBreathReductionDb);
+				  return true;
+			  }));
+	});
+
+	menu->addAction(QTStr("AudioEditor.Fx.DeEss"), this, [this]() {
+		RunEffect(QTStr("AudioEditor.Fx.DeEss"), OnSelection([](std::vector<float> &s, int ch, auto &) {
+				  VoiceEffects::DeEss(s, ch, kDeEssMaxDb);
+				  return true;
+			  }));
+	});
+
+	menu->addAction(QTStr("AudioEditor.Fx.Clicks"), this, [this]() {
+		RunEffect(QTStr("AudioEditor.Fx.Clicks"), OnSelection([](std::vector<float> &s, int ch, auto &) {
+				  VoiceEffects::RemoveClicks(s, ch);
 				  return true;
 			  }));
 	});
@@ -554,14 +594,56 @@ void AudioEditor::ChangeVolume()
 	});
 }
 
+std::vector<VoiceEffects::Range> AudioEditor::RoomToneRanges() const
+{
+	std::vector<VoiceEffects::Range> ranges;
+	for (const auto &range : timeline.RoomTone()) {
+		ranges.push_back({range.first, range.second});
+	}
+	return ranges;
+}
+
 void AudioEditor::PolishVoice()
 {
+	/* the countdown silence at the very start: keep half a second of it */
+	constexpr qint64 kKeepHeadFrames = AudioTimeline::kSampleRate / 2;
+
 	double target = LoudnessTarget();
-	RunEffect(QTStr("AudioEditor.Polish"), [target](std::vector<float> &s, int ch, auto &cuts) {
-		VoiceEffects::PolishVoice(s, ch, target);
+	auto roomTone = RoomToneRanges();
+	qint64 headCut = 0;
+	for (const auto &range : roomTone) {
+		if (range.start == 0 && range.end > kKeepHeadFrames) {
+			headCut = range.end - kKeepHeadFrames;
+		}
+	}
+
+	RunEffect(QTStr("AudioEditor.Polish"), [target, roomTone, headCut](std::vector<float> &s, int ch, auto &cuts) {
+		VoiceEffects::PolishVoice(s, ch, target, roomTone);
 		cuts = ToCuts(VoiceEffects::FindLongPauses(s, ch, kMinPauseSec, kKeepPauseSec));
+		if (headCut > 0 && (cuts.isEmpty() || cuts.first().first > headCut)) {
+			cuts.prepend({0, headCut});
+		}
 		return true;
 	});
+}
+
+void AudioEditor::RemoveMistakes()
+{
+	if (processing || timeline.IsComparing() || timeline.Mistakes().isEmpty()) {
+		return;
+	}
+	StopPlayback();
+
+	std::vector<float> audio = timeline.Render();
+	std::vector<int64_t> marks(timeline.Mistakes().begin(), timeline.Mistakes().end());
+	auto cuts = ToCuts(VoiceEffects::MistakeCuts(audio, timeline.Channels(), marks));
+	if (cuts.isEmpty()) {
+		return;
+	}
+	/* cut like a manual edit: Undo brings the wrong sentences back */
+	timeline.CutRanges(cuts);
+	waveform->TimelineChanged();
+	UpdateInfo();
 }
 
 AudioEditor::EffectWork AudioEditor::OnSelection(EffectWork work) const
@@ -697,6 +779,10 @@ void AudioEditor::UpdateInfo()
 	effectsButton->setEnabled(canEdit);
 	exportButton->setEnabled(canEdit);
 	compareButton->setEnabled(timeline.CanCompare() && !processing);
+	const int mistakeCount = int(timeline.Mistakes().size());
+	mistakesButton->setVisible(mistakeCount > 0);
+	mistakesButton->setEnabled(canEdit);
+	mistakesButton->setText(QTStr("AudioEditor.RemoveMistakes").arg(mistakeCount));
 	compareButton->setChecked(timeline.IsComparing());
 
 	if (!hasAudio) {
@@ -717,36 +803,110 @@ void AudioEditor::UpdateInfo()
 	infoLabel->setText(text);
 }
 
-void AudioEditor::Export()
+namespace {
+enum ExportPreset { kExportWav = 0, kExportSocial, kExportPodcast, kExportAudiobook };
+
+struct ExportResult {
+	bool ok = false;
+	QString error;
+	VoiceEffects::AcxReport report;
+};
+
+QString CheckLine(bool ok, const QString &text)
 {
-	if (processing || timeline.IsComparing()) {
-		return;
-	}
-	if (timeline.TotalFrames() == 0) {
+	return (ok ? QStringLiteral("✓  ") : QStringLiteral("✗  ")) + text;
+}
+} // namespace
+
+void AudioEditor::Export(int preset)
+{
+	/* ACX wants 44.1 kHz, 192 kbps constant bitrate MP3 */
+	constexpr int kMp3Rate = 44100;
+	constexpr int kMp3BitrateKbps = 192;
+	constexpr double kSocialLufs = -14.0;
+	constexpr double kPodcastLufs = -16.0;
+
+	if (processing || timeline.IsComparing() || timeline.TotalFrames() == 0) {
 		return;
 	}
 	StopPlayback();
 
-	QString name = QString::fromUtf8(kExportPrefix) + QStringLiteral("%1.wav").arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH-mm-ss"));
+	const bool mp3 = preset == kExportPodcast || preset == kExportAudiobook;
+	const QString suffix = mp3 ? QStringLiteral("mp3") : QStringLiteral("wav");
+	QString name = QString::fromUtf8(kExportPrefix) +
+		       QStringLiteral("%1.%2").arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH-mm-ss"), suffix);
 	QString path = QFileDialog::getSaveFileName(this, QTStr("AudioEditor.Export"), QDir(exportFolder).filePath(name),
-						    QStringLiteral("WAV (*.wav)"));
+						    mp3 ? QStringLiteral("MP3 (*.mp3)") : QStringLiteral("WAV (*.wav)"));
 	if (path.isEmpty()) {
 		return;
 	}
-	if (!path.endsWith(".wav", Qt::CaseInsensitive)) {
-		path += ".wav";
+	if (!path.endsWith("." + suffix, Qt::CaseInsensitive)) {
+		path += "." + suffix;
 	}
 
-	QApplication::setOverrideCursor(Qt::WaitCursor);
-	QString error;
-	bool ok = timeline.ExportWav(path, error);
-	QApplication::restoreOverrideCursor();
+	processing = true;
+	UpdateInfo();
+	infoLabel->setText(QTStr("AudioEditor.Exporting"));
+	QApplication::setOverrideCursor(Qt::BusyCursor);
 
-	if (!ok) {
-		OBSMessageBox::warning(this, QTStr("AudioEditor.Title"), QTStr("AudioEditor.ExportFailed").arg(error));
-		return;
-	}
+	auto roomTone = RoomToneRanges();
+	auto future = QtConcurrent::run([audio = timeline.Render(), channels = timeline.Channels(), preset, path,
+					 roomTone]() mutable {
+		ExportResult result;
+		switch (preset) {
+		case kExportSocial:
+			VoiceEffects::NormalizeLoudness(audio, channels, kSocialLufs, kCeilingDb);
+			break;
+		case kExportPodcast:
+			VoiceEffects::NormalizeLoudness(audio, channels, kPodcastLufs, kCeilingDb);
+			break;
+		case kExportAudiobook:
+			VoiceEffects::MasterForAudiobook(audio, channels, roomTone);
+			result.report = VoiceEffects::CheckAudiobook(audio, channels);
+			break;
+		default:
+			break;
+		}
+		result.ok = preset == kExportPodcast || preset == kExportAudiobook
+				    ? AudioExport::WriteMp3(path, audio, channels, AudioTimeline::kSampleRate, kMp3Rate,
+							    kMp3BitrateKbps, result.error)
+				    : AudioExport::WriteWav24(path, audio, channels, AudioTimeline::kSampleRate,
+							      result.error);
+		return result;
+	});
 
-	emit Exported(path);
-	OBSMessageBox::information(this, QTStr("AudioEditor.Title"), QTStr("AudioEditor.ExportDone").arg(path));
+	auto *watcher = new QFutureWatcher<ExportResult>(this);
+	connect(watcher, &QFutureWatcher<ExportResult>::finished, this, [this, watcher, path, preset]() {
+		ExportResult result = watcher->result();
+		watcher->deleteLater();
+		QApplication::restoreOverrideCursor();
+		processing = false;
+		UpdateInfo();
+
+		if (!result.ok) {
+			OBSMessageBox::warning(this, QTStr("AudioEditor.Title"),
+					       QTStr("AudioEditor.ExportFailed").arg(result.error));
+			return;
+		}
+		emit Exported(path);
+
+		QString message = QTStr("AudioEditor.ExportDoneTo").arg(path);
+		if (preset == kExportAudiobook) {
+			const auto &r = result.report;
+			message += "\n\n" + QTStr(r.Passed() ? "AudioEditor.Acx.Passed" : "AudioEditor.Acx.Failed") +
+				   "\n" +
+				   CheckLine(r.RmsOk(), QTStr("AudioEditor.Acx.Rms").arg(r.rmsDb, 0, 'f', 1)) + "\n" +
+				   CheckLine(r.PeakOk(), QTStr("AudioEditor.Acx.Peak").arg(r.peakDb, 0, 'f', 1)) +
+				   "\n" +
+				   CheckLine(r.NoiseOk(),
+					     QTStr("AudioEditor.Acx.Noise").arg(r.noiseFloorDb, 0, 'f', 1)) +
+				   "\n" +
+				   CheckLine(r.HeadOk() && r.TailOk(),
+					     QTStr("AudioEditor.Acx.RoomTone")
+						     .arg(r.headSec, 0, 'f', 1)
+						     .arg(r.tailSec, 0, 'f', 1));
+		}
+		OBSMessageBox::information(this, QTStr("AudioEditor.Title"), message);
+	});
+	watcher->setFuture(future);
 }

@@ -3,6 +3,8 @@
 #include <QPointer>
 #include <QWidget>
 
+class QCheckBox;
+class QHBoxLayout;
 class QLabel;
 class QTextEdit;
 class QPushButton;
@@ -22,6 +24,15 @@ public slots:
 	void StartScrolling();
 	void PauseScrolling();
 	void StopScrolling();
+	/* with "Follow my voice" on, the text only moves while the narrator talks */
+	void SetVoiceActive(bool active);
+	void BiggerText();
+	void SmallerText();
+
+public:
+	/* puts a widget (the microphone bar) into the toolbar after Edit Script;
+	 * nullptr takes it out again */
+	void SetToolbarAccessory(QWidget *widget);
 
 protected:
 	void keyPressEvent(QKeyEvent *event) override;
@@ -42,6 +53,10 @@ private:
 	QPushButton *playButton = nullptr;
 	QPushButton *editButton = nullptr;
 	QSlider *speedSlider = nullptr;
+	QCheckBox *followVoiceBox = nullptr;
+	QHBoxLayout *toolbar = nullptr;
+	QWidget *accessory = nullptr;
+	bool voiceActive = false;
 	QTimer *scrollTimer = nullptr;
 
 	bool editing = false;

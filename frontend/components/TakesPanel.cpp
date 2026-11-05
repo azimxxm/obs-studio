@@ -259,6 +259,11 @@ void TakesPanel::MoveToTrash(const QStringList &paths)
 		if (!QFile::moveToTrash(path)) {
 			blog(LOG_WARNING, "Takes: could not move '%s' to the Trash", QT_TO_UTF8(path));
 		}
+		/* the take's mistake marks and room tone go with it */
+		QString sidecar = path + QStringLiteral(".narration.json");
+		if (QFile::exists(sidecar)) {
+			QFile::moveToTrash(sidecar);
+		}
 	}
 	Refresh();
 }

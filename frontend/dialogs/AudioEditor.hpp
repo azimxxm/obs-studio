@@ -1,6 +1,7 @@
 #pragma once
 
 #include <components/AudioTimeline.hpp>
+#include <utility/VoiceEffects.hpp>
 
 #include <QDialog>
 #include <QPointer>
@@ -39,8 +40,10 @@ private slots:
 	void UndoCut();
 	void NormalizeVolume();
 	void PolishVoice();
+	void RemoveMistakes();
 	void ToggleCompare();
-	void Export();
+	/* 0 = WAV as is, 1 = YouTube/Instagram, 2 = Podcast MP3, 3 = Audiobook (ACX) */
+	void Export(int preset = 0);
 	void UpdatePlayhead();
 	void UpdateInfo();
 
@@ -58,6 +61,7 @@ private:
 	QPushButton *undoButton = nullptr;
 	QPushButton *normalizeButton = nullptr;
 	QPushButton *polishButton = nullptr;
+	QPushButton *mistakesButton = nullptr;
 	QPushButton *effectsButton = nullptr;
 	QPushButton *compareButton = nullptr;
 	QPushButton *selectToolButton = nullptr;
@@ -80,6 +84,7 @@ private:
 	EffectWork OnSelection(EffectWork work) const;
 	void ApplyFade(bool fadeIn);
 	void ChangeVolume();
+	std::vector<VoiceEffects::Range> RoomToneRanges() const;
 	static double LoudnessTarget();
 	static void SetLoudnessTarget(double lufs);
 	void StartPlayback(qint64 from, qint64 to);

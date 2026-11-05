@@ -4,10 +4,12 @@
 
 #include <OBSApp.hpp>
 
+#include <QCheckBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QTextEdit>
 #include <QPushButton>
@@ -34,8 +36,12 @@ constexpr int kTimerIntervalMs = 16;
 /* pixels per second for speed 1, grows linearly with the slider */
 constexpr double kPixelsPerSecondPerStep = 12.0;
 constexpr double kReadingGuideRatio = 0.33;
-constexpr int kMaxColumnWidth = 1200;
-constexpr int kMinSideMargin = 64;
+/* wide enough to fill a maximized window, the side margins only keep text off the edges */
+constexpr int kMaxColumnWidth = 2400;
+constexpr int kMinSideMargin = 32;
+constexpr int kToolbarButtonHeight = 36;
+constexpr int kToolbarFontPx = 13;
+constexpr int kPlayButtonWidth = 140;
 constexpr const char *kConfigSection = "Teleprompter";
 } // namespace
 
@@ -72,12 +78,12 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	editButton = new QPushButton(this);
 	playButton = new QPushButton(this);
 	playButton->setProperty("class", "btn-primary");
-	playButton->setMinimumSize(160, 44);
-	openButton->setMinimumHeight(36);
-	editButton->setMinimumHeight(36);
 	auto *topButton = new QPushButton(QTStr("Teleprompter.ToStart"), this);
-	auto *smallerButton = new QPushButton("A-", this);
-	auto *biggerButton = new QPushButton("A+", this);
+	/* the buttons show their own shortcut: Cmd- and Cmd+ */
+	auto *smallerButton = new QPushButton(
+		QStringLiteral("A−   ") + QKeySequence(QKeySequence::ZoomOut).toString(QKeySequence::NativeText), this);
+	auto *biggerButton = new QPushButton(
+		QStringLiteral("A+   ") + QKeySequence(QKeySequence::ZoomIn).toString(QKeySequence::NativeText), this);
 	smallerButton->setToolTip(QTStr("Teleprompter.FontSmaller"));
 	biggerButton->setToolTip(QTStr("Teleprompter.FontBigger"));
 
@@ -86,7 +92,20 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	speedSlider->setFixedWidth(160);
 	speedSlider->setToolTip(QTStr("Teleprompter.Speed"));
 
-	auto *toolbar = new QHBoxLayout();
+	followVoiceBox = new QCheckBox(QTStr("Teleprompter.FollowVoice"), this);
+	followVoiceBox->setToolTip(QTStr("Teleprompter.FollowVoiceTip"));
+	followVoiceBox->setFocusPolicy(Qt::NoFocus);
+
+	/* one height and one text size for every button in the bar */
+	for (QPushButton *button : {openButton, editButton, topButton, playButton, smallerButton, biggerButton}) {
+		button->setFixedHeight(kToolbarButtonHeight);
+		button->setStyleSheet(QStringLiteral("font-size: %1px; padding: 0 14px;").arg(kToolbarFontPx));
+	}
+	/* Start Scrolling / Pause swap text, a fixed width stops the bar from jumping */
+	playButton->setMinimumWidth(kPlayButtonWidth);
+	followVoiceBox->setStyleSheet(QStringLiteral("font-size: %1px;").arg(kToolbarFontPx));
+
+	toolbar = new QHBoxLayout();
 	toolbar->setContentsMargins(8, 8, 8, 8);
 	toolbar->setSpacing(8);
 	toolbar->addWidget(openButton);
@@ -95,7 +114,11 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	toolbar->addWidget(topButton);
 	toolbar->addWidget(playButton);
 	toolbar->addSpacing(12);
-	toolbar->addWidget(new QLabel(QTStr("Teleprompter.Speed"), this));
+	toolbar->addWidget(followVoiceBox);
+	toolbar->addSpacing(12);
+	auto *speedLabel = new QLabel(QTStr("Teleprompter.Speed"), this);
+	speedLabel->setStyleSheet(QStringLiteral("font-size: %1px;").arg(kToolbarFontPx));
+	toolbar->addWidget(speedLabel);
 	toolbar->addWidget(speedSlider);
 	toolbar->addSpacing(12);
 	toolbar->addWidget(smallerButton);
@@ -115,8 +138,8 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	connect(editButton, &QPushButton::clicked, this, &Teleprompter::ToggleEditMode);
 	connect(openButton, &QPushButton::clicked, this, &Teleprompter::OpenTextFile);
 	connect(topButton, &QPushButton::clicked, this, &Teleprompter::JumpToStart);
-	connect(smallerButton, &QPushButton::clicked, this, [this]() { ChangeFontSize(-kFontStep); });
-	connect(biggerButton, &QPushButton::clicked, this, [this]() { ChangeFontSize(kFontStep); });
+	connect(smallerButton, &QPushButton::clicked, this, &Teleprompter::SmallerText);
+	connect(biggerButton, &QPushButton::clicked, this, &Teleprompter::BiggerText);
 	connect(textView, &QTextEdit::textChanged, this, &Teleprompter::UpdateEmptyState);
 
 	LoadState();
@@ -144,6 +167,8 @@ void Teleprompter::LoadState()
 	config_t *config = App()->GetUserConfig();
 	config_set_default_int(config, kConfigSection, "FontSize", kDefaultFontSize);
 	config_set_default_int(config, kConfigSection, "Speed", kDefaultSpeed);
+	config_set_default_bool(config, kConfigSection, "FollowMyVoice", false);
+	followVoiceBox->setChecked(config_get_bool(config, kConfigSection, "FollowMyVoice"));
 
 	fontSize = std::clamp((int)config_get_int(config, kConfigSection, "FontSize"), kMinFontSize, kMaxFontSize);
 	speedSlider->setValue((int)config_get_int(config, kConfigSection, "Speed"));
@@ -159,6 +184,7 @@ void Teleprompter::SaveState()
 	config_t *config = App()->GetUserConfig();
 	config_set_int(config, kConfigSection, "FontSize", fontSize);
 	config_set_int(config, kConfigSection, "Speed", speedSlider->value());
+	config_set_bool(config, kConfigSection, "FollowMyVoice", followVoiceBox->isChecked());
 
 	QString path = ScriptFilePath();
 	if (path.isEmpty()) {
@@ -327,8 +353,45 @@ void Teleprompter::OpenTextFile()
 	SaveState();
 }
 
+void Teleprompter::SetToolbarAccessory(QWidget *widget)
+{
+	if (accessory) {
+		toolbar->removeWidget(accessory);
+	}
+	accessory = widget;
+	if (auto *button = qobject_cast<QPushButton *>(accessory)) {
+		/* same size and text as the buttons around it */
+		button->setFixedHeight(kToolbarButtonHeight);
+		button->setStyleSheet(QStringLiteral("font-size: %1px; padding: 0 14px;").arg(kToolbarFontPx));
+	}
+	if (accessory) {
+		/* index 2: right after Open Text File and Edit Script */
+		toolbar->insertWidget(2, accessory);
+		accessory->show();
+	}
+}
+
+void Teleprompter::BiggerText()
+{
+	ChangeFontSize(kFontStep);
+}
+
+void Teleprompter::SmallerText()
+{
+	ChangeFontSize(-kFontStep);
+}
+
+void Teleprompter::SetVoiceActive(bool active)
+{
+	voiceActive = active;
+}
+
 void Teleprompter::ScrollStep()
 {
+	/* wait for the narrator: no voice, no scrolling */
+	if (followVoiceBox->isChecked() && !voiceActive) {
+		return;
+	}
 	QScrollBar *bar = textView->verticalScrollBar();
 	if (bar->value() >= bar->maximum()) {
 		PauseScrolling();

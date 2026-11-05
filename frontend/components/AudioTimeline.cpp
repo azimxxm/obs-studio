@@ -10,6 +10,9 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QUrl>
 
 #include "moc_AudioTimeline.cpp"
@@ -18,7 +21,6 @@ namespace {
 /* short fade at every join so cuts don't click */
 constexpr qint64 kFadeFrames = AudioTimeline::kSampleRate * 4 / 1000;
 constexpr int kMaxChannels = 2;
-constexpr int kExportBytesPerSample = 3;
 
 struct WavInfo {
 	int channels = 0;
@@ -75,18 +77,6 @@ bool ReadWavInfo(const QString &path, WavInfo &info)
 
 	return info.channels > 0 && info.dataBytes >= 0;
 }
-
-void WriteLE32(QByteArray &out, quint32 v)
-{
-	char b[4] = {char(v & 0xff), char((v >> 8) & 0xff), char((v >> 16) & 0xff), char((v >> 24) & 0xff)};
-	out.append(b, 4);
-}
-
-void WriteLE16(QByteArray &out, quint16 v)
-{
-	char b[2] = {char(v & 0xff), char((v >> 8) & 0xff)};
-	out.append(b, 2);
-}
 } // namespace
 
 int ReadWavChannels(const QString &path)
@@ -113,6 +103,8 @@ bool AudioTimeline::Load(const QStringList &paths, QString &error)
 	segments.clear();
 	undoStack.clear();
 	gain = 1.0f;
+	mistakes.clear();
+	roomTone.clear();
 
 	/* WAV takes tell us their channel count, other formats are treated as stereo */
 	channels = 1;
@@ -132,6 +124,7 @@ bool AudioTimeline::Load(const QStringList &paths, QString &error)
 			continue;
 		}
 		BuildPeaks(clip, channels);
+		LoadSidecar(path, TotalFrames());
 		segments.append({int(sources.size()), 0, clip.frames});
 		sources.push_back(std::move(clip));
 	}
@@ -360,6 +353,58 @@ void AudioTimeline::CutRanges(const QVector<QPair<qint64, qint64>> &ranges)
 	}
 }
 
+void AudioTimeline::LoadSidecar(const QString &path, qint64 offset)
+{
+	QFile file(path + QStringLiteral(".narration.json"));
+	if (!file.open(QIODevice::ReadOnly)) {
+		return;
+	}
+	QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+	auto toFrame = [offset](double seconds) { return offset + qint64(seconds * kSampleRate); };
+
+	QJsonArray tone = root["roomTone"].toArray();
+	if (tone.size() == 2 && tone[1].toDouble() > tone[0].toDouble()) {
+		roomTone.append({toFrame(tone[0].toDouble()), toFrame(tone[1].toDouble())});
+	}
+	for (const QJsonValue mark : root["mistakes"].toArray()) {
+		mistakes.append(toFrame(mark.toDouble()));
+	}
+}
+
+void AudioTimeline::ShiftMarksForCut(qint64 from, qint64 to)
+{
+	const qint64 length = to - from;
+	QVector<qint64> keptMarks;
+	for (qint64 mark : mistakes) {
+		if (mark < from) {
+			keptMarks.append(mark);
+		} else if (mark >= to) {
+			keptMarks.append(mark - length);
+		}
+	}
+	mistakes = keptMarks;
+
+	/* room tone that survives the cut, clipped and moved like the audio */
+	QVector<QPair<qint64, qint64>> keptTone;
+	for (const auto &range : roomTone) {
+		auto move = [&](qint64 frame) { return frame < from ? frame : frame >= to ? frame - length : from; };
+		qint64 start = move(range.first);
+		qint64 end = move(range.second);
+		if (end > start) {
+			keptTone.append({start, end});
+		}
+	}
+	roomTone = keptTone;
+}
+
+void AudioTimeline::RestoreState(const EditState &state)
+{
+	segments = state.segments;
+	gain = state.gain;
+	mistakes = state.mistakes;
+	roomTone = state.roomTone;
+}
+
 void AudioTimeline::CutWithoutUndo(qint64 from, qint64 to)
 {
 	from = std::clamp<qint64>(from, 0, TotalFrames());
@@ -367,6 +412,7 @@ void AudioTimeline::CutWithoutUndo(qint64 from, qint64 to)
 	if (to <= from) {
 		return;
 	}
+	ShiftMarksForCut(from, to);
 
 	QVector<AudioSegment> kept;
 	qint64 segmentStart = 0;
@@ -392,7 +438,7 @@ void AudioTimeline::CutWithoutUndo(qint64 from, qint64 to)
 
 void AudioTimeline::SaveUndoState()
 {
-	undoStack.append({segments, gain});
+	undoStack.append(CurrentState());
 	/* a new edit makes the old before/after pair meaningless */
 	hasBefore = false;
 }
@@ -406,7 +452,7 @@ std::vector<float> AudioTimeline::Render() const
 
 void AudioTimeline::ReplaceWithRendered(std::vector<float> &&samples, const QVector<QPair<qint64, qint64>> &cuts)
 {
-	EditState previous{segments, gain};
+	EditState previous = CurrentState();
 	SaveUndoState();
 
 	AudioSourceClip clip;
@@ -431,8 +477,9 @@ void AudioTimeline::ToggleCompare()
 	if (!hasBefore) {
 		return;
 	}
-	std::swap(segments, before.segments);
-	std::swap(gain, before.gain);
+	EditState current = CurrentState();
+	RestoreState(before);
+	before = current;
 	comparing = !comparing;
 }
 
@@ -443,9 +490,7 @@ void AudioTimeline::Undo()
 	}
 	hasBefore = false;
 	if (!undoStack.isEmpty()) {
-		EditState state = undoStack.takeLast();
-		segments = state.segments;
-		gain = state.gain;
+		RestoreState(undoStack.takeLast());
 	}
 }
 
@@ -483,57 +528,6 @@ bool AudioTimeline::Normalize(float targetDb)
 float AudioTimeline::GainDb() const
 {
 	return 20.0f * std::log10(gain);
-}
-
-bool AudioTimeline::ExportWav(const QString &path, QString &error) const
-{
-	QFile file(path);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		error = file.errorString();
-		return false;
-	}
-
-	const qint64 frames = TotalFrames();
-	const quint32 dataBytes = quint32(frames * channels * kExportBytesPerSample);
-	const quint16 blockAlign = quint16(channels * kExportBytesPerSample);
-
-	/* plain PCM 24-bit header, the format every editor opens */
-	QByteArray header;
-	header.append("RIFF", 4);
-	WriteLE32(header, 36 + dataBytes);
-	header.append("WAVEfmt ", 8);
-	WriteLE32(header, 16);
-	WriteLE16(header, 1);
-	WriteLE16(header, quint16(channels));
-	WriteLE32(header, kSampleRate);
-	WriteLE32(header, quint32(kSampleRate) * blockAlign);
-	WriteLE16(header, blockAlign);
-	WriteLE16(header, kExportBytesPerSample * 8);
-	header.append("data", 4);
-	WriteLE32(header, dataBytes);
-	file.write(header);
-
-	constexpr qint64 kChunkFrames = 65536;
-	std::vector<float> chunk(size_t(kChunkFrames * channels));
-	QByteArray pcm;
-
-	for (qint64 position = 0; position < frames; position += kChunkFrames) {
-		qint64 count = Read(position, chunk.data(), std::min(kChunkFrames, frames - position));
-		pcm.resize(count * channels * kExportBytesPerSample);
-		char *dst = pcm.data();
-		for (qint64 i = 0; i < count * channels; i++) {
-			float clamped = std::clamp(chunk[size_t(i)], -1.0f, 1.0f);
-			qint32 value = qint32(std::lround(clamped * 8388607.0f));
-			*dst++ = char(value & 0xff);
-			*dst++ = char((value >> 8) & 0xff);
-			*dst++ = char((value >> 16) & 0xff);
-		}
-		if (file.write(pcm) != pcm.size()) {
-			error = file.errorString();
-			return false;
-		}
-	}
-	return true;
 }
 
 /* ---------------------------------------------------------------------- */

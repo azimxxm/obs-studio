@@ -97,6 +97,10 @@ target_sources(
     components/VolumeAccessibleInterface.hpp
     components/VolumeControl.cpp
     components/VolumeControl.hpp
+    components/MicrophoneButton.cpp
+    components/MicrophoneButton.hpp
+    components/NarratorSession.cpp
+    components/NarratorSession.hpp
     components/TakesPanel.cpp
     components/TakesPanel.hpp
     components/Teleprompter.cpp

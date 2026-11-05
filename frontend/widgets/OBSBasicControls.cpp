@@ -3,6 +3,8 @@
 #include "qt-wrappers.hpp"
 
 #include <QKeySequence>
+#include <QPainter>
+#include <QPixmap>
 
 #include "moc_OBSBasicControls.cpp"
 
@@ -292,29 +294,40 @@ void OBSBasicControls::EnableVirtualCamButtons()
 }
 
 /* Big red Record button: it is the one action a narrator really needs */
+/* Same big button, but in the theme's normal colours: a small red dot says
+ * "record", and a thin red frame shows that a take is being recorded. */
 static constexpr const char *kAudioOnlyRecordStyle = R"(
 QPushButton#recordButton {
-	min-height: 64px;
 	font-size: 18px;
 	font-weight: 600;
-	color: #ffffff;
-	background-color: #c62828;
-	border: none;
 	border-radius: 8px;
 }
-QPushButton#recordButton:hover {
-	background-color: #d63a3a;
-}
 QPushButton#recordButton[class~="state-active"] {
-	background-color: #1e1f25;
-	border: 3px solid #e5484d;
+	border: 2px solid #e5484d;
 }
 )";
+
+/* a filled red circle drawn once, used as the Record button icon */
+static QIcon RecordDotIcon()
+{
+	constexpr int kSize = 14;
+	QPixmap pixmap(kSize * 2, kSize * 2);
+	pixmap.setDevicePixelRatio(2.0);
+	pixmap.fill(Qt::transparent);
+	QPainter painter(&pixmap);
+	painter.setRenderHint(QPainter::Antialiasing);
+	painter.setPen(Qt::NoPen);
+	painter.setBrush(QColor(229, 72, 77));
+	painter.drawEllipse(QRectF(1, 1, kSize - 2, kSize - 2));
+	return QIcon(pixmap);
+}
 
 void OBSBasicControls::SetAudioOnlyMode(bool enabled)
 {
 	audioOnly = enabled;
 	ui->recordButton->setStyleSheet(enabled ? kAudioOnlyRecordStyle : "");
+	ui->recordButton->setIcon(enabled ? RecordDotIcon() : QIcon());
+	ui->recordButton->setIconSize(QSize(14, 14));
 	ui->recordButton->setMinimumHeight(enabled ? 64 : 0);
 	ui->pauseRecordButton->setMinimumHeight(enabled ? 44 : 0);
 	/* Give the Record button room so it doesn't touch Settings */
@@ -334,7 +347,8 @@ void OBSBasicControls::UpdateRecordText()
 {
 	QString text = QTStr(recordingActive ? "Basic.Main.StopRecording" : "Basic.Main.StartRecording");
 	if (audioOnly) {
-		text += QStringLiteral("   ") + ShortcutText(Qt::CTRL | Qt::Key_R);
+		/* a little room between the red dot and the words */
+		text = QStringLiteral("  ") + text + QStringLiteral("   ") + ShortcutText(Qt::CTRL | Qt::Key_R);
 	}
 	ui->recordButton->setText(text);
 }

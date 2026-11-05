@@ -417,6 +417,7 @@ private slots:
 	void AdvOutRecCheckCodecs();
 
 	void SimpleRecordingQualityChanged();
+	void UpdateAudioOnlySettingsPages();
 	void SimpleRecordingAudioHintChanged();
 	void SimpleRecordingEncoderChanged();
 	void SimpleRecordingQualityLosslessWarning(int idx);

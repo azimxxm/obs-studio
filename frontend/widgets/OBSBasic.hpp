@@ -187,6 +187,8 @@ static inline void ClearProcessPriority()
 
 class Teleprompter;
 class TakesPanel;
+class NarratorSession;
+class MicrophoneButton;
 class QShortcut;
 class QSplitter;
 class OBSBasic : public OBSMainWindow {
@@ -1008,7 +1010,10 @@ private:
 	bool audioOnlyLayoutActive = false;
 	QPointer<Teleprompter> teleprompter;
 	QPointer<TakesPanel> takesPanel;
+	QPointer<NarratorSession> narrator;
 	QPointer<QSplitter> audioOnlySplitter;
+	QPointer<MicrophoneButton> micButton;
+	void MoveMicrophoneBar(bool intoTeleprompter);
 	QList<QShortcut *> audioOnlyShortcuts;
 
 	void AutoRemux(QString input, bool no_show = false);

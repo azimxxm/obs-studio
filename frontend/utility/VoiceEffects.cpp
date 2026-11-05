@@ -125,8 +125,11 @@ void Fft(std::vector<std::complex<double>> &data, bool inverse)
 }
 } // namespace
 
-void CleanNoiseSpectral(std::vector<float> &samples, int channels, float reductionDb)
+void CleanNoiseSpectral(std::vector<float> &samples, int channels, float reductionDb,
+			const std::vector<Range> &noiseRanges)
 {
+	/* a known stretch of room sound is the best noise profile there is */
+	constexpr int64_t kMinRoomToneFrames = kSampleRate * 3 / 10;
 	constexpr size_t kFft = 1024; // 21 ms, fine enough to keep voice harmonics apart
 	constexpr size_t kHop = kFft / 4;
 	constexpr size_t kBins = kFft / 2 + 1;
@@ -183,17 +186,38 @@ void CleanNoiseSpectral(std::vector<float> &samples, int channels, float reducti
 		/* 2. noise profile: average power of the quietest frames that are not
 		 * the digital silence we padded with */
 		std::vector<size_t> order;
-		for (size_t t = 0; t < stftFrames; t++) {
-			if (frameEnergy[t] > 1e-14) {
-				order.push_back(t);
+		int64_t roomToneFrames = 0;
+		for (const Range &range : noiseRanges) {
+			roomToneFrames += range.end - range.start;
+		}
+		if (roomToneFrames >= kMinRoomToneFrames) {
+			/* frames that lie completely inside the room tone */
+			for (size_t t = 0; t < stftFrames; t++) {
+				int64_t first = int64_t(t * kHop) - int64_t(pad);
+				int64_t last = first + int64_t(kFft);
+				for (const Range &range : noiseRanges) {
+					if (first >= range.start && last <= range.end) {
+						order.push_back(t);
+						break;
+					}
+				}
 			}
 		}
-		if (order.size() < 8) {
-			continue;
+		size_t noiseFrames = order.size();
+		if (noiseFrames < 4) {
+			order.clear();
+			for (size_t t = 0; t < stftFrames; t++) {
+				if (frameEnergy[t] > 1e-14) {
+					order.push_back(t);
+				}
+			}
+			if (order.size() < 8) {
+				continue;
+			}
+			std::sort(order.begin(), order.end(),
+				  [&](size_t a, size_t b) { return frameEnergy[a] < frameEnergy[b]; });
+			noiseFrames = std::max<size_t>(4, size_t(double(order.size()) * kNoiseFrameShare));
 		}
-		std::sort(order.begin(), order.end(),
-			  [&](size_t a, size_t b) { return frameEnergy[a] < frameEnergy[b]; });
-		size_t noiseFrames = std::max<size_t>(4, size_t(double(order.size()) * kNoiseFrameShare));
 		std::vector<double> noise(kBins, 0.0);
 		for (size_t i = 0; i < noiseFrames; i++) {
 			spectrumAt(order[i], buffer);
@@ -596,7 +620,7 @@ void QuietPauses(std::vector<float> &samples, int channels, float maxReductionDb
 	}
 }
 
-void PolishVoice(std::vector<float> &samples, int channels, double targetLufs)
+void PolishVoice(std::vector<float> &samples, int channels, double targetLufs, const std::vector<Range> &noiseRanges)
 {
 	constexpr float kRumbleHz = 80.0f;
 	/* bring every microphone to the same working level before compressing */
@@ -608,7 +632,7 @@ void PolishVoice(std::vector<float> &samples, int channels, double targetLufs)
 
 	/* measured on real narration: the spectral cleaner keeps the voice more
 	 * natural than RNNoise for steady room noise */
-	CleanNoiseSpectral(samples, channels, kStudioReductionDb);
+	CleanNoiseSpectral(samples, channels, kStudioReductionDb, noiseRanges);
 	HighPass(samples, channels, kRumbleHz);
 	NormalizeLoudness(samples, channels, kWorkingLufs, kCeilingDb);
 	Compress(samples, channels, -26.0f, 3.0f, 5.0f, 120.0f);
@@ -669,4 +693,443 @@ std::vector<Range> FindLongPauses(const std::vector<float> &samples, int channel
 	return cuts;
 }
 
+std::vector<Range> FindPauses(const std::vector<float> &samples, int channels, double minPauseSec)
+{
+	std::vector<Range> pauses;
+	std::vector<double> levels = WindowLevels(samples, channels);
+	if (levels.size() < 10) {
+		return pauses;
+	}
+	const double threshold = SilenceThreshold(levels);
+	const int64_t minWindows = std::max<int64_t>(1, int64_t(minPauseSec * 100));
+	const int64_t windows = int64_t(levels.size());
+
+	int64_t runStart = -1;
+	for (int64_t w = 0; w <= windows; w++) {
+		bool quiet = w < windows && levels[size_t(w)] < threshold;
+		if (quiet && runStart < 0) {
+			runStart = w;
+		} else if (!quiet && runStart >= 0) {
+			if (w - runStart >= minWindows) {
+				pauses.push_back({runStart * kLevelWindow, w * kLevelWindow});
+			}
+			runStart = -1;
+		}
+	}
+	return pauses;
+}
+
+std::vector<Range> MistakeCuts(const std::vector<float> &samples, int channels, const std::vector<int64_t> &marks)
+{
+	/* a sentence boundary is a pause of at least this long */
+	constexpr double kSentencePauseSec = 0.3;
+	/* M is pressed a moment after the slip, so look a little before the mark */
+	constexpr int64_t kReactionFrames = kSampleRate / 2;
+	/* leave this much quiet before the re-read so it doesn't start abruptly */
+	constexpr int64_t kLeadInFrames = kSampleRate / 10;
+
+	std::vector<Range> pauses = FindPauses(samples, channels, kSentencePauseSec);
+	const int64_t total = Frames(samples, channels);
+	std::vector<Range> cuts;
+
+	for (int64_t mark : marks) {
+		/* the pause where the narrator stopped (contains the mark or comes right after) */
+		const Range *after = nullptr;
+		for (const Range &pause : pauses) {
+			if (pause.end > mark) {
+				after = &pause;
+				break;
+			}
+		}
+		/* the pause before the sentence that went wrong */
+		const Range *before = nullptr;
+		for (const Range &pause : pauses) {
+			if (pause.end <= mark - kReactionFrames && (!after || pause.end <= after->start)) {
+				before = &pause;
+			}
+		}
+
+		int64_t start = before ? (before->start + before->end) / 2 : 0;
+		int64_t end = after ? std::max(after->start, after->end - kLeadInFrames) : total;
+		if (end > start) {
+			cuts.push_back({start, end});
+		}
+	}
+
+	/* two marks on the same sentence give overlapping cuts: merge them */
+	std::sort(cuts.begin(), cuts.end(), [](const Range &a, const Range &b) { return a.start < b.start; });
+	std::vector<Range> merged;
+	for (const Range &cut : cuts) {
+		if (!merged.empty() && cut.start <= merged.back().end) {
+			merged.back().end = std::max(merged.back().end, cut.end);
+		} else {
+			merged.push_back(cut);
+		}
+	}
+	return merged;
+}
+
+namespace {
+double RmsDb(const std::vector<float> &samples)
+{
+	double sum = 0.0;
+	for (float x : samples) {
+		sum += double(x) * x;
+	}
+	return 10.0 * std::log10(sum / double(std::max<size_t>(1, samples.size())) + 1e-20);
+}
+
+double PeakDb(const std::vector<float> &samples)
+{
+	float peak = 0.0f;
+	for (float x : samples) {
+		peak = std::max(peak, std::fabs(x));
+	}
+	return GainToDb(peak);
+}
+
+/* the quietest half second: ACX's idea of the noise floor, and our room tone */
+Range QuietestHalfSecond(const std::vector<float> &samples, int channels)
+{
+	constexpr int64_t kWindow = kSampleRate / 2;
+	const int64_t frames = Frames(samples, channels);
+	Range best{0, std::min(kWindow, frames)};
+	double bestEnergy = 1e30;
+	for (int64_t start = 0; start + kWindow <= frames; start += kWindow / 4) {
+		double energy = 0.0;
+		for (int64_t i = start * channels; i < (start + kWindow) * channels; i++) {
+			energy += double(samples[size_t(i)]) * samples[size_t(i)];
+		}
+		if (energy < bestEnergy) {
+			bestEnergy = energy;
+			best = {start, start + kWindow};
+		}
+	}
+	return best;
+}
+
+/* how long the audio stays quiet at the start (or end) */
+double QuietEdgeSeconds(const std::vector<float> &samples, int channels, bool atStart)
+{
+	std::vector<Range> pauses = FindPauses(samples, channels, 0.05);
+	const int64_t frames = Frames(samples, channels);
+	for (const Range &pause : pauses) {
+		if (atStart && pause.start == 0) {
+			return double(pause.end) / kSampleRate;
+		}
+		if (!atStart && pause.end >= frames - kLevelWindow) {
+			return double(frames - pause.start) / kSampleRate;
+		}
+	}
+	return 0.0;
+}
+
+/* room tone of the given length, looped with short crossfades */
+std::vector<float> MakeRoomTone(const std::vector<float> &tone, int channels, int64_t frames)
+{
+	constexpr int64_t kFade = kSampleRate / 50;
+	const int64_t toneFrames = Frames(tone, channels);
+	std::vector<float> out(size_t(frames * channels), 0.0f);
+	if (toneFrames <= kFade * 2) {
+		return out;
+	}
+	const int64_t step = toneFrames - kFade;
+	for (int64_t start = 0; start < frames; start += step) {
+		for (int64_t f = 0; f < toneFrames && start + f < frames; f++) {
+			double gain = 1.0;
+			if (f < kFade && start > 0) {
+				gain = double(f) / kFade;
+			} else if (f >= toneFrames - kFade) {
+				gain = double(toneFrames - f) / kFade;
+			}
+			for (int c = 0; c < channels; c++) {
+				out[size_t((start + f) * channels + c)] += float(gain * tone[size_t(f * channels + c)]);
+			}
+		}
+	}
+	return out;
+}
+} // namespace
+
+void MasterForAudiobook(std::vector<float> &samples, int channels, const std::vector<Range> &roomTone)
+{
+	constexpr double kTargetRmsDb = -20.0;
+	constexpr float kPeakCeilingDb = -3.5f;
+	constexpr double kHeadSec = 0.75;
+	constexpr double kTailSec = 2.0;
+	constexpr int kPasses = 4;
+
+	for (int pass = 0; pass < kPasses; pass++) {
+		double change = kTargetRmsDb - RmsDb(samples);
+		if (pass > 0 && std::fabs(change) < 0.2) {
+			break;
+		}
+		float gain = float(DbToGain(change));
+		for (float &x : samples) {
+			x *= gain;
+		}
+		Limit(samples, channels, kPeakCeilingDb);
+	}
+
+	/* room tone to pad with: the recorded one if we have it, else the quietest bit */
+	Range source = roomTone.empty() ? QuietestHalfSecond(samples, channels) : roomTone.front();
+	std::vector<float> tone(samples.begin() + source.start * channels, samples.begin() + source.end * channels);
+
+	auto fixEdge = [&](bool atStart, double wantSec) {
+		const int64_t have = int64_t(QuietEdgeSeconds(samples, channels, atStart) * kSampleRate);
+		const int64_t want = int64_t(wantSec * kSampleRate);
+		if (have > want) {
+			/* too much silence: trim it */
+			int64_t cut = (have - want) * channels;
+			if (atStart) {
+				samples.erase(samples.begin(), samples.begin() + cut);
+			} else {
+				samples.erase(samples.end() - cut, samples.end());
+			}
+		} else if (have < want) {
+			std::vector<float> pad = MakeRoomTone(tone, channels, want - have);
+			samples.insert(atStart ? samples.begin() : samples.end(), pad.begin(), pad.end());
+		}
+	};
+	fixEdge(true, kHeadSec);
+	fixEdge(false, kTailSec);
+}
+
+AcxReport CheckAudiobook(const std::vector<float> &samples, int channels)
+{
+	AcxReport report;
+	report.rmsDb = RmsDb(samples);
+	report.peakDb = PeakDb(samples);
+	Range quiet = QuietestHalfSecond(samples, channels);
+	std::vector<float> floor(samples.begin() + quiet.start * channels, samples.begin() + quiet.end * channels);
+	report.noiseFloorDb = RmsDb(floor);
+	report.headSec = QuietEdgeSeconds(samples, channels, true);
+	report.tailSec = QuietEdgeSeconds(samples, channels, false);
+	return report;
+}
+
+int ReduceBreaths(std::vector<float> &samples, int channels, float reductionDb)
+{
+	/* a breath is a short, soft, airy (hiss-like) sound right next to silence;
+	 * a fading word ending is soft too, but its energy sits low, below 1 kHz */
+	constexpr double kMinBreathSec = 0.08;
+	constexpr double kMaxBreathSec = 0.8;
+	constexpr double kBelowSpeechDb = 8.0;
+	constexpr double kAiryDb = 3.0; // high band louder than low band by this much
+	constexpr int64_t kNearSilenceWindows = 15; // 150 ms
+	constexpr int64_t kRampFrames = kSampleRate / 50;
+
+	std::vector<double> levels = WindowLevels(samples, channels);
+	if (levels.size() < 20) {
+		return 0;
+	}
+	std::vector<double> sorted = levels;
+	std::sort(sorted.begin(), sorted.end());
+	const double speech = sorted[sorted.size() * 95 / 100];
+	const double silence = SilenceThreshold(levels);
+	const double breathCeiling = speech - kBelowSpeechDb;
+	if (breathCeiling <= silence) {
+		return 0;
+	}
+
+	/* per 10 ms window: energy above 2 kHz minus energy below 1 kHz, in dB */
+	const int64_t windows = int64_t(levels.size());
+	std::vector<double> airiness(static_cast<size_t>(windows), -100.0);
+	{
+		double w0 = 2.0 * kPi * 1000.0 / kSampleRate;
+		double alpha = std::sin(w0) / (2.0 * std::sqrt(0.5));
+		double cosw = std::cos(w0);
+		double a0 = 1.0 + alpha;
+		Biquad low{(1.0 - cosw) / 2.0 / a0, (1.0 - cosw) / a0, (1.0 - cosw) / 2.0 / a0, -2.0 * cosw / a0,
+			     (1.0 - alpha) / a0};
+		Biquad high = MakeHighPass(2000.0);
+		for (int64_t w = 0; w < windows; w++) {
+			double lowSum = 1e-20, highSum = 1e-20;
+			for (int64_t f = w * kLevelWindow; f < (w + 1) * kLevelWindow; f++) {
+				double mono = 0.0;
+				for (int c = 0; c < channels; c++) {
+					mono += samples[size_t(f * channels + c)];
+				}
+				mono /= channels;
+				double l = low.Process(mono);
+				double h = high.Process(mono);
+				lowSum += l * l;
+				highSum += h * h;
+			}
+			airiness[size_t(w)] = 10.0 * std::log10(highSum / lowSum);
+		}
+	}
+
+	auto isSilent = [&](int64_t w) { return w < 0 || w >= windows || levels[size_t(w)] < silence; };
+	auto nearSilence = [&](int64_t from, int64_t to) {
+		for (int64_t w = from; w < to; w++) {
+			if (isSilent(w)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	auto isBreathy = [&](int64_t w) {
+		return w < windows && levels[size_t(w)] >= silence && levels[size_t(w)] < breathCeiling &&
+		       airiness[size_t(w)] > kAiryDb;
+	};
+
+	int found = 0;
+	const double gain = DbToGain(-std::fabs(reductionDb));
+	int64_t runStart = -1;
+	for (int64_t w = 0; w <= windows; w++) {
+		bool breathy = isBreathy(w);
+		if (breathy && runStart < 0) {
+			runStart = w;
+		} else if (!breathy && runStart >= 0) {
+			double seconds = double(w - runStart) / 100.0;
+			bool breathLength = seconds >= kMinBreathSec && seconds <= kMaxBreathSec;
+			bool besideSilence = nearSilence(runStart - kNearSilenceWindows, runStart) ||
+					     nearSilence(w, w + kNearSilenceWindows);
+			if (breathLength && besideSilence) {
+				const int64_t first = runStart * kLevelWindow;
+				const int64_t last = w * kLevelWindow;
+				for (int64_t f = first; f < last; f++) {
+					/* ramp down and back up so the dip itself is not heard */
+					double edge = std::min(1.0, std::min(double(f - first), double(last - f)) / kRampFrames);
+					float g = float(1.0 - (1.0 - gain) * edge);
+					for (int c = 0; c < channels; c++) {
+						samples[size_t(f * channels + c)] *= g;
+					}
+				}
+				found++;
+			}
+			runStart = -1;
+		}
+	}
+	return found;
+}
+
+void DeEss(std::vector<float> &samples, int channels, float maxReductionDb)
+{
+	/* "s" lives above ~5 kHz; when that band gets close to the whole signal, turn it down */
+	constexpr double kSplitHz = 5000.0;
+	constexpr double kTriggerDb = -6.0;
+	constexpr double kRangeDb = 10.0;
+	constexpr double kAttackMs = 1.0;
+	constexpr double kReleaseMs = 60.0;
+
+	const int64_t frames = Frames(samples, channels);
+	const double attack = std::exp(-1.0 / (kAttackMs * 0.001 * kSampleRate));
+	const double release = std::exp(-1.0 / (kReleaseMs * 0.001 * kSampleRate));
+
+	/* RBJ low-pass at the split point; high = input - low */
+	double w0 = 2.0 * kPi * kSplitHz / kSampleRate;
+	double alpha = std::sin(w0) / (2.0 * std::sqrt(0.5));
+	double cosw = std::cos(w0);
+	double a0 = 1.0 + alpha;
+	Biquad proto{(1.0 - cosw) / 2.0 / a0, (1.0 - cosw) / a0, (1.0 - cosw) / 2.0 / a0, -2.0 * cosw / a0,
+		     (1.0 - alpha) / a0};
+
+	std::vector<Biquad> lowpass(size_t(channels), proto);
+	double highEnv = 0.0, fullEnv = 0.0, reduction = 0.0;
+	std::vector<double> low(static_cast<size_t>(channels));
+	std::vector<double> high(static_cast<size_t>(channels));
+
+	for (int64_t f = 0; f < frames; f++) {
+		double highPeak = 0.0, fullPeak = 0.0;
+		for (int c = 0; c < channels; c++) {
+			double x = samples[size_t(f * channels + c)];
+			low[size_t(c)] = lowpass[size_t(c)].Process(x);
+			high[size_t(c)] = x - low[size_t(c)];
+			highPeak = std::max(highPeak, std::fabs(high[size_t(c)]));
+			fullPeak = std::max(fullPeak, std::fabs(x));
+		}
+		highEnv = highPeak > highEnv ? attack * highEnv + (1 - attack) * highPeak
+					     : release * highEnv + (1 - release) * highPeak;
+		fullEnv = fullPeak > fullEnv ? attack * fullEnv + (1 - attack) * fullPeak
+					     : release * fullEnv + (1 - release) * fullPeak;
+
+		double ratioDb = GainToDb(highEnv) - GainToDb(fullEnv + 1e-9);
+		double target = std::clamp((ratioDb - kTriggerDb) / kRangeDb, 0.0, 1.0) * maxReductionDb;
+		double coef = target > reduction ? attack : release;
+		reduction = coef * reduction + (1 - coef) * target;
+
+		double g = DbToGain(-reduction);
+		for (int c = 0; c < channels; c++) {
+			samples[size_t(f * channels + c)] = float(low[size_t(c)] + g * high[size_t(c)]);
+		}
+	}
+}
+
+int RemoveClicks(std::vector<float> &samples, int channels)
+{
+	/* a click is a spike a few milliseconds long that sticks far out of its surroundings */
+	constexpr int64_t kContext = kSampleRate / 50;     // 20 ms around it
+	constexpr int64_t kMaxClick = kSampleRate * 3 / 1000; // longer than 3 ms is a sound, not a click
+	constexpr int64_t kRepairPad = kSampleRate / 2000; // 0.5 ms each side
+	constexpr double kSpikeRatio = 12.0;
+	/* jumps smaller than this (about -46 dBFS) are never audible clicks */
+	constexpr double kMinJump = 0.005;
+	constexpr int64_t kGuard = kSampleRate / 500; // 2 ms kept out of the "surroundings"
+
+	const int64_t frames = Frames(samples, channels);
+	if (frames < kContext * 4) {
+		return 0;
+	}
+
+	/* first difference of the mono mix highlights sudden jumps */
+	std::vector<double> diff(static_cast<size_t>(frames), 0.0);
+	for (int64_t f = 1; f < frames; f++) {
+		double now = 0.0, before = 0.0;
+		for (int c = 0; c < channels; c++) {
+			now += samples[size_t(f * channels + c)];
+			before += samples[size_t((f - 1) * channels + c)];
+		}
+		diff[size_t(f)] = std::fabs(now - before) / channels;
+	}
+	std::vector<double> prefix(size_t(frames) + 1, 0.0);
+	for (int64_t f = 0; f < frames; f++) {
+		prefix[size_t(f + 1)] = prefix[size_t(f)] + diff[size_t(f)] * diff[size_t(f)];
+	}
+	auto localRms = [&](int64_t a, int64_t b) {
+		a = std::max<int64_t>(0, a);
+		b = std::min(frames, b);
+		return std::sqrt((prefix[size_t(b)] - prefix[size_t(a)]) / double(std::max<int64_t>(1, b - a)));
+	};
+
+	int found = 0;
+	for (int64_t f = kContext; f < frames - kContext;) {
+		/* surroundings without the spike itself, so a click can't hide itself */
+		double around = std::sqrt((std::pow(localRms(f - kContext, f - kGuard), 2) +
+					   std::pow(localRms(f + kGuard, f + kContext), 2)) /
+					  2.0);
+		if (around <= 1e-6 || diff[size_t(f)] < kMinJump || diff[size_t(f)] < kSpikeRatio * around) {
+			f++;
+			continue;
+		}
+		/* how long does the spike last? */
+		int64_t end = f;
+		while (end < frames - kContext && diff[size_t(end)] >= kSpikeRatio * 0.3 * around) {
+			end++;
+		}
+		if (end - f > kMaxClick) {
+			f = end;
+			continue;
+		}
+
+		/* bridge the click with a smooth curve between the clean samples around it */
+		int64_t a = f - kRepairPad;
+		int64_t b = end + kRepairPad;
+		for (int c = 0; c < channels; c++) {
+			double ya = samples[size_t(a * channels + c)];
+			double yb = samples[size_t(b * channels + c)];
+			for (int64_t i = a + 1; i < b; i++) {
+				double t = double(i - a) / double(b - a);
+				double smooth = t * t * (3.0 - 2.0 * t);
+				samples[size_t(i * channels + c)] = float(ya + (yb - ya) * smooth);
+			}
+		}
+		found++;
+		f = b + 1;
+	}
+	return found;
+}
+
 } // namespace VoiceEffects
+

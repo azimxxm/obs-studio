@@ -433,6 +433,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	HookWidget(ui->simpleOutRecMode,     COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecAudioFormat, COMBO_CHANGED, OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecAudioChannels, COMBO_CHANGED, OUTPUTS_CHANGED);
+	HookWidget(ui->simpleOutRecCountdown,     SCROLL_CHANGED, OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecQuality,  COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecEncoder,  COMBO_CHANGED,  OUTPUTS_CHANGED);
 	HookWidget(ui->simpleOutRecAEncoder, COMBO_CHANGED,  OUTPUTS_CHANGED);
@@ -688,6 +689,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 
 	connect(ui->streamDelaySec, &QSpinBox::valueChanged, this, &OBSBasicSettings::UpdateStreamDelayEstimate);
 	connect(ui->outputMode, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::UpdateStreamDelayEstimate);
+	connect(ui->outputMode, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::UpdateAudioOnlySettingsPages);
 	connect(ui->simpleOutputVBitrate, &QSpinBox::valueChanged, this, &OBSBasicSettings::UpdateStreamDelayEstimate);
 	connect(ui->simpleOutputABitrate, &QComboBox::currentIndexChanged, this,
 		&OBSBasicSettings::UpdateStreamDelayEstimate);
@@ -1828,6 +1830,7 @@ void OBSBasicSettings::LoadSimpleOutputSettings()
 
 	idx = ui->simpleOutRecAudioChannels->findData(QString(recAudioChannels));
 	ui->simpleOutRecAudioChannels->setCurrentIndex(idx == -1 ? 0 : idx);
+	ui->simpleOutRecCountdown->setValue(int(config_get_int(main->Config(), "SimpleOutput", "RecCountdown")));
 
 	idx = ui->simpleOutStrEncoder->findData(QString(streamEnc));
 	if (idx == -1) {
@@ -3532,6 +3535,7 @@ void OBSBasicSettings::SaveOutputSettings()
 	SaveComboData(ui->simpleOutRecMode, "SimpleOutput", "RecMode");
 	SaveComboData(ui->simpleOutRecAudioFormat, "SimpleOutput", "RecAudioFormat");
 	SaveComboData(ui->simpleOutRecAudioChannels, "SimpleOutput", "RecAudioChannels");
+	SaveSpinBox(ui->simpleOutRecCountdown, "SimpleOutput", "RecCountdown");
 	SaveComboData(ui->simpleOutRecQuality, "SimpleOutput", "RecQuality");
 	SaveComboData(ui->simpleOutRecEncoder, "SimpleOutput", "RecEncoder");
 	SaveComboData(ui->simpleOutRecAEncoder, "SimpleOutput", "RecAudioEncoder");
@@ -5039,7 +5043,11 @@ void OBSBasicSettings::SimpleRecordingQualityChanged()
 	ui->simpleOutRecAudioChannels->setVisible(audioOnly);
 	ui->simpleOutRecAudioChannelsLabel->setVisible(audioOnly);
 	ui->simpleOutRecAudioHint->setVisible(audioOnly);
+	ui->simpleOutRecCountdown->setVisible(audioOnly);
+	ui->simpleOutRecCountdownLabel->setVisible(audioOnly);
 	SimpleRecordingAudioHintChanged();
+	SimpleRecordingEncoderChanged();
+	UpdateAudioOnlySettingsPages();
 
 	UpdateMultitrackVideo();
 	SimpleRecordingEncoderChanged();
@@ -5547,7 +5555,9 @@ void OBSBasicSettings::SimpleRecordingEncoderChanged()
 		}
 	}
 
-	if (warning.isEmpty()) {
+	/* the stream and encoder warnings don't apply to audio-only recordings */
+	bool audioOnly = ui->simpleOutRecMode->currentData().toString() == "Audio";
+	if (warning.isEmpty() || audioOnly) {
 		return;
 	}
 
@@ -5555,6 +5565,33 @@ void OBSBasicSettings::SimpleRecordingEncoderChanged()
 	simpleOutRecWarning->setProperty("class", "text-warning");
 	simpleOutRecWarning->setWordWrap(true);
 	ui->simpleOutInfoLayout->addWidget(simpleOutRecWarning);
+}
+
+/* In audio-only mode the streaming, video and scene settings only get in the
+ * way, so they are hidden; switching back to Video shows everything again. */
+void OBSBasicSettings::UpdateAudioOnlySettingsPages()
+{
+	bool simple = ui->outputMode->currentIndex() == 0;
+	bool audioOnly = simple && ui->simpleOutRecMode->currentData().toString() == "Audio";
+
+	ui->listWidget->item(Pages::STREAM)->setHidden(audioOnly);
+	ui->listWidget->item(Pages::VIDEO)->setHidden(audioOnly);
+	ui->simpleStreamingGroupBox->setVisible(!audioOnly);
+
+	/* General page: snapping, projectors, studio mode and multiview are for video */
+	for (QWidget *box : {static_cast<QWidget *>(ui->groupBox_10), static_cast<QWidget *>(ui->groupBox_14),
+			     static_cast<QWidget *>(ui->groupBox_18), static_cast<QWidget *>(ui->groupBox_11),
+			     static_cast<QWidget *>(ui->groupBoxMultiview)}) {
+		box->setVisible(!audioOnly);
+	}
+	for (QWidget *box : {static_cast<QWidget *>(ui->warnBeforeStreamStart),
+			     static_cast<QWidget *>(ui->warnBeforeStreamStop),
+			     static_cast<QWidget *>(ui->recordWhenStreaming),
+			     static_cast<QWidget *>(ui->keepRecordStreamStops),
+			     static_cast<QWidget *>(ui->replayWhileStreaming),
+			     static_cast<QWidget *>(ui->keepReplayStreamStops)}) {
+		box->setVisible(!audioOnly);
+	}
 }
 
 void OBSBasicSettings::SurroundWarning(int idx)

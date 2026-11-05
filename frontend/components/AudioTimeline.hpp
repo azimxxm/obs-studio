@@ -71,12 +71,16 @@ public:
 	void SetPreviewGain(qint64 from, qint64 to, float gainDb);
 	void ClearPreview();
 
+	/* marks from the recording (<take>.narration.json), kept in timeline
+	 * positions and moved along with every cut */
+	const QVector<qint64> &Mistakes() const { return mistakes; }
+	const QVector<QPair<qint64, qint64>> &RoomTone() const { return roomTone; }
+
 	/* switch between the audio before and after the last effect */
 	bool CanCompare() const { return hasBefore; }
 	bool IsComparing() const { return comparing; }
 	void ToggleCompare();
 
-	bool ExportWav(const QString &path, QString &error) const;
 
 private:
 	int channels = 1;
@@ -85,10 +89,14 @@ private:
 	struct EditState {
 		QVector<AudioSegment> segments;
 		float gain = 1.0f;
+		QVector<qint64> mistakes;
+		QVector<QPair<qint64, qint64>> roomTone;
 	};
 
 	QVector<AudioSegment> segments;
 	float gain = 1.0f;
+	QVector<qint64> mistakes;
+	QVector<QPair<qint64, qint64>> roomTone;
 	QVector<EditState> undoStack;
 	qint64 previewFrom = 0;
 	qint64 previewTo = 0;
@@ -103,6 +111,10 @@ private:
 	float RawPeak() const;
 	void SaveUndoState();
 	void CutWithoutUndo(qint64 from, qint64 to);
+	void ShiftMarksForCut(qint64 from, qint64 to);
+	void LoadSidecar(const QString &path, qint64 offset);
+	EditState CurrentState() const { return {segments, gain, mistakes, roomTone}; }
+	void RestoreState(const EditState &state);
 };
 
 /* Feeds the timeline to QAudioSink while the user listens in the editor. */

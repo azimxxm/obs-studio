@@ -641,6 +641,7 @@ bool OBSBasic::InitBasicConfigDefaults()
 	config_set_default_string(activeConfiguration, "SimpleOutput", "RecMode", "Video");
 	config_set_default_string(activeConfiguration, "SimpleOutput", "RecAudioFormat", "wav");
 	config_set_default_string(activeConfiguration, "SimpleOutput", "RecAudioChannels", "mono");
+	config_set_default_int(activeConfiguration, "SimpleOutput", "RecCountdown", 3);
 	config_set_default_bool(activeConfiguration, "SimpleOutput", "RecRB", false);
 	config_set_default_int(activeConfiguration, "SimpleOutput", "RecRBTime", 20);
 	config_set_default_int(activeConfiguration, "SimpleOutput", "RecRBSize", 512);
