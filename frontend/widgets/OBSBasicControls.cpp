@@ -2,6 +2,8 @@
 #include "OBSBasic.hpp"
 #include "qt-wrappers.hpp"
 
+#include <QKeySequence>
+
 #include "moc_OBSBasicControls.cpp"
 
 OBSBasicControls::OBSBasicControls(OBSBasic *main) : QFrame(nullptr), ui(new Ui::OBSBasicControls)
@@ -181,7 +183,8 @@ void OBSBasicControls::BroadcastStreamStarted(bool autoStop)
 void OBSBasicControls::RecordingStarted(bool pausable)
 {
 	setClasses(ui->recordButton, "state-active");
-	ui->recordButton->setText(QTStr("Basic.Main.StopRecording"));
+	recordingActive = true;
+	UpdateRecordText();
 
 	if (pausable) {
 		ui->pauseRecordButton->setVisible(pausable);
@@ -219,7 +222,8 @@ void OBSBasicControls::RecordingStopping()
 void OBSBasicControls::RecordingStopped()
 {
 	setClasses(ui->recordButton, "");
-	ui->recordButton->setText(QTStr("Basic.Main.StartRecording"));
+	recordingActive = false;
+	UpdateRecordText();
 
 	ui->pauseRecordButton->setVisible(false);
 }
@@ -316,7 +320,23 @@ void OBSBasicControls::SetAudioOnlyMode(bool enabled)
 	/* Give the Record button room so it doesn't touch Settings */
 	ui->buttonsVLayout->setSpacing(enabled ? 10 : 0);
 	ui->verticalLayout_9->setSpacing(enabled ? 10 : 0);
+	UpdateRecordText();
 	UpdateButtonVisibility();
+}
+
+static QString ShortcutText(QKeyCombination key)
+{
+	return QKeySequence(key).toString(QKeySequence::NativeText);
+}
+
+/* Shows the shortcut on the button itself so nobody has to look it up */
+void OBSBasicControls::UpdateRecordText()
+{
+	QString text = QTStr(recordingActive ? "Basic.Main.StopRecording" : "Basic.Main.StartRecording");
+	if (audioOnly) {
+		text += QStringLiteral("   ") + ShortcutText(Qt::CTRL | Qt::Key_R);
+	}
+	ui->recordButton->setText(text);
 }
 
 /* In audio-only mode only Record (with Pause) and Settings stay visible */

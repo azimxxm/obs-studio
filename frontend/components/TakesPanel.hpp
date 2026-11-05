@@ -23,12 +23,12 @@ public slots:
 	void PlayLatest();
 	void DeleteLatest();
 	void StopPlayback();
+	void ShowSelectedInFinder();
+	void OpenEditor();
 
 private slots:
 	void TogglePlaySelected();
 	void DeleteSelected();
-	void ShowSelectedInFinder();
-	void OpenEditor();
 	void UpdateButtons();
 
 private:

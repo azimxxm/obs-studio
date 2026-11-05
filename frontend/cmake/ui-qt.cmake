@@ -13,6 +13,12 @@ target_link_libraries(
   PRIVATE Qt::Widgets Qt::Svg Qt::Xml Qt::Network Qt::Multimedia Qt::Concurrent OBS::qt-wrappers
 )
 
+# reuse the noise suppression library that obs-filters already builds
+if(TARGET Librnnoise::Librnnoise)
+  target_link_libraries(obs-studio PRIVATE Librnnoise::Librnnoise)
+  target_compile_definitions(obs-studio PRIVATE HAVE_RNNOISE)
+endif()
+
 set_target_properties(
   obs-studio
   PROPERTIES AUTOMOC TRUE AUTOUIC TRUE AUTORCC TRUE AUTOGEN_PARALLEL AUTO

@@ -25,10 +25,14 @@ const QColor kBoundary(255, 196, 80);
 const QColor kPlayhead(229, 72, 77);
 const QColor kRulerText(160, 160, 170);
 
-QString FormatTime(double seconds)
+QString FormatTime(double seconds, bool withTenths)
 {
 	int total = int(seconds);
-	return QStringLiteral("%1:%2").arg(total / 60).arg(total % 60, 2, 10, QLatin1Char('0'));
+	QString text = QStringLiteral("%1:%2").arg(total / 60).arg(total % 60, 2, 10, QLatin1Char('0'));
+	if (withTenths) {
+		text += QStringLiteral(".%1").arg(int(std::lround((seconds - total) * 10)) % 10);
+	}
+	return text;
 }
 } // namespace
 
@@ -38,6 +42,18 @@ WaveformView::WaveformView(QWidget *parent) : QWidget(parent)
 	setMouseTracking(false);
 	setFocusPolicy(Qt::StrongFocus);
 	setCursor(Qt::IBeamCursor);
+}
+
+void WaveformView::SetTool(Tool newTool)
+{
+	if (tool == newTool) {
+		return;
+	}
+	tool = newTool;
+	panning = false;
+	dragging = false;
+	setCursor(tool == Tool::Hand ? Qt::OpenHandCursor : Qt::IBeamCursor);
+	emit ToolChanged(tool);
 }
 
 void WaveformView::SetTimeline(const AudioTimeline *timeline_)
@@ -144,7 +160,7 @@ void WaveformView::DrawRuler(QPainter &painter, const QRect &area)
 	for (double t = first; t * AudioTimeline::kSampleRate < viewStart + viewLength; t += step) {
 		double x = XAtFrame(qint64(t * AudioTimeline::kSampleRate));
 		painter.drawLine(QPointF(x, area.bottom() - 5), QPointF(x, area.bottom()));
-		painter.drawText(QPointF(x + 3, area.bottom() - 7), FormatTime(t));
+		painter.drawText(QPointF(x + 3, area.bottom() - 7), FormatTime(t, step < 1.0));
 	}
 }
 
@@ -206,6 +222,13 @@ void WaveformView::mousePressEvent(QMouseEvent *event)
 	if (event->button() != Qt::LeftButton || !timeline) {
 		return;
 	}
+	if (tool == Tool::Hand) {
+		panning = true;
+		panStartX = event->position().x();
+		panStartView = viewStart;
+		setCursor(Qt::ClosedHandCursor);
+		return;
+	}
 	dragging = true;
 	dragAnchor = FrameAtX(event->position().x());
 
@@ -222,6 +245,13 @@ void WaveformView::mousePressEvent(QMouseEvent *event)
 
 void WaveformView::mouseMoveEvent(QMouseEvent *event)
 {
+	if (panning) {
+		/* the audio follows the hand: drag right to go back in time */
+		double framesPerPixel = double(viewLength) / std::max(1, width());
+		qint64 shift = qint64((panStartX - event->position().x()) * framesPerPixel);
+		SetView(panStartView + shift, viewLength);
+		return;
+	}
 	if (!dragging) {
 		return;
 	}
@@ -237,6 +267,11 @@ void WaveformView::mouseMoveEvent(QMouseEvent *event)
 
 void WaveformView::mouseReleaseEvent(QMouseEvent *event)
 {
+	if (panning && event->button() == Qt::LeftButton) {
+		panning = false;
+		setCursor(Qt::OpenHandCursor);
+		return;
+	}
 	if (!dragging || event->button() != Qt::LeftButton) {
 		return;
 	}
@@ -257,7 +292,7 @@ void WaveformView::mouseReleaseEvent(QMouseEvent *event)
 
 void WaveformView::mouseDoubleClickEvent(QMouseEvent *event)
 {
-	if (event->button() != Qt::LeftButton) {
+	if (event->button() != Qt::LeftButton || tool == Tool::Hand) {
 		return;
 	}
 	/* the release after a double click must not turn this back into a click */

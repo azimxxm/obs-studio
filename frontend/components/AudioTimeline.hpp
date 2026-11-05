@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QIODevice>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -35,6 +36,8 @@ public:
 	bool Load(const QStringList &paths, QString &error);
 
 	int Channels() const { return channels; }
+	/* how many files were opened; effects add clips but not takes */
+	int TakeCount() const { return takeCount; }
 	qint64 TotalFrames() const;
 	const QVector<AudioSegment> &Segments() const { return segments; }
 	const std::vector<AudioSourceClip> &Sources() const { return sources; }
@@ -55,10 +58,29 @@ public:
 	bool CanUndo() const { return !undoStack.isEmpty(); }
 	void Undo();
 
+	/* the whole edited audio as one buffer, the way it will be exported */
+	std::vector<float> Render() const;
+	/* puts processed audio (from an effect) in place of the timeline as one undo
+	 * step; cuts (positions in the new audio) are applied in the same step */
+	void ReplaceWithRendered(std::vector<float> &&samples, const QVector<QPair<qint64, qint64>> &cuts = {});
+	/* cuts several parts as one step, ranges must not overlap */
+	void CutRanges(const QVector<QPair<qint64, qint64>> &ranges);
+
+	/* temporary volume change on [from, to) for previewing; it is heard and
+	 * drawn but not saved until the effect itself is applied */
+	void SetPreviewGain(qint64 from, qint64 to, float gainDb);
+	void ClearPreview();
+
+	/* switch between the audio before and after the last effect */
+	bool CanCompare() const { return hasBefore; }
+	bool IsComparing() const { return comparing; }
+	void ToggleCompare();
+
 	bool ExportWav(const QString &path, QString &error) const;
 
 private:
 	int channels = 1;
+	int takeCount = 0;
 	std::vector<AudioSourceClip> sources;
 	struct EditState {
 		QVector<AudioSegment> segments;
@@ -68,12 +90,19 @@ private:
 	QVector<AudioSegment> segments;
 	float gain = 1.0f;
 	QVector<EditState> undoStack;
+	qint64 previewFrom = 0;
+	qint64 previewTo = 0;
+	float previewGain = 1.0f;
+	EditState before;
+	bool hasBefore = false;
+	bool comparing = false;
 
 	bool Decode(const QString &path, AudioSourceClip &clip, QString &error) const;
 	static void BuildPeaks(AudioSourceClip &clip, int channels);
 	float FadeGain(qint64 position) const;
 	float RawPeak() const;
 	void SaveUndoState();
+	void CutWithoutUndo(qint64 from, qint64 to);
 };
 
 /* Feeds the timeline to QAudioSink while the user listens in the editor. */

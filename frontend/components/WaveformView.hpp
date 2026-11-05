@@ -10,7 +10,13 @@ class WaveformView : public QWidget {
 	Q_OBJECT
 
 public:
+	/* Select drags out a selection, Hand drags the timeline left and right */
+	enum class Tool { Select, Hand };
+
 	explicit WaveformView(QWidget *parent = nullptr);
+
+	void SetTool(Tool tool);
+	Tool CurrentTool() const { return tool; }
 
 	void SetTimeline(const AudioTimeline *timeline);
 	void TimelineChanged();
@@ -31,6 +37,7 @@ public:
 signals:
 	void SelectionChanged();
 	void CursorMoved(qint64 frame);
+	void ToolChanged(WaveformView::Tool tool);
 
 protected:
 	void paintEvent(QPaintEvent *event) override;
@@ -54,6 +61,11 @@ private:
 
 	bool dragging = false;
 	qint64 dragAnchor = 0;
+
+	Tool tool = Tool::Select;
+	bool panning = false;
+	double panStartX = 0.0;
+	qint64 panStartView = 0;
 
 	qint64 FrameAtX(double x) const;
 	double XAtFrame(qint64 frame) const;

@@ -140,6 +140,7 @@ bool AudioTimeline::Load(const QStringList &paths, QString &error)
 		error = QStringLiteral("No audio found in the selected files.");
 		return false;
 	}
+	takeCount = int(sources.size());
 	return true;
 }
 
@@ -259,7 +260,21 @@ float AudioTimeline::PeakAt(qint64 from, qint64 to) const
 		}
 		segmentStart = segmentEnd;
 	}
-	return peak * gain;
+	bool inPreview = previewGain != 1.0f && from < previewTo && to > previewFrom;
+	return peak * gain * (inPreview ? previewGain : 1.0f);
+}
+
+void AudioTimeline::SetPreviewGain(qint64 from, qint64 to, float gainDb)
+{
+	previewFrom = from;
+	previewTo = to;
+	previewGain = std::pow(10.0f, gainDb / 20.0f);
+}
+
+void AudioTimeline::ClearPreview()
+{
+	previewFrom = previewTo = 0;
+	previewGain = 1.0f;
 }
 
 float AudioTimeline::FadeGain(qint64 position) const
@@ -299,6 +314,14 @@ qint64 AudioTimeline::Read(qint64 position, float *out, qint64 frameCount) const
 		}
 	}
 
+	if (previewGain != 1.0f) {
+		qint64 first = std::max(position, previewFrom);
+		qint64 last = std::min(position + copied, previewTo);
+		for (qint64 i = (first - position) * channels; i < (last - position) * channels; i++) {
+			out[i] *= previewGain;
+		}
+	}
+
 	/* soften the joins; only frames near a boundary are touched */
 	for (qint64 boundary : Boundaries()) {
 		qint64 first = std::max(position, boundary - kFadeFrames);
@@ -322,6 +345,28 @@ void AudioTimeline::Cut(qint64 from, qint64 to)
 	}
 
 	SaveUndoState();
+	CutWithoutUndo(from, to);
+}
+
+void AudioTimeline::CutRanges(const QVector<QPair<qint64, qint64>> &ranges)
+{
+	if (ranges.isEmpty()) {
+		return;
+	}
+	SaveUndoState();
+	/* from the end backwards so earlier positions stay valid */
+	for (int i = int(ranges.size()) - 1; i >= 0; i--) {
+		CutWithoutUndo(ranges[i].first, ranges[i].second);
+	}
+}
+
+void AudioTimeline::CutWithoutUndo(qint64 from, qint64 to)
+{
+	from = std::clamp<qint64>(from, 0, TotalFrames());
+	to = std::clamp<qint64>(to, 0, TotalFrames());
+	if (to <= from) {
+		return;
+	}
 
 	QVector<AudioSegment> kept;
 	qint64 segmentStart = 0;
@@ -348,10 +393,55 @@ void AudioTimeline::Cut(qint64 from, qint64 to)
 void AudioTimeline::SaveUndoState()
 {
 	undoStack.append({segments, gain});
+	/* a new edit makes the old before/after pair meaningless */
+	hasBefore = false;
+}
+
+std::vector<float> AudioTimeline::Render() const
+{
+	std::vector<float> out(size_t(TotalFrames() * channels));
+	Read(0, out.data(), TotalFrames());
+	return out;
+}
+
+void AudioTimeline::ReplaceWithRendered(std::vector<float> &&samples, const QVector<QPair<qint64, qint64>> &cuts)
+{
+	EditState previous{segments, gain};
+	SaveUndoState();
+
+	AudioSourceClip clip;
+	clip.path = sources.empty() ? QString() : sources.front().path;
+	clip.samples = std::move(samples);
+	clip.frames = qint64(clip.samples.size()) / channels;
+	BuildPeaks(clip, channels);
+
+	segments = {{int(sources.size()), 0, clip.frames}};
+	gain = 1.0f;
+	sources.push_back(std::move(clip));
+	for (int i = int(cuts.size()) - 1; i >= 0; i--) {
+		CutWithoutUndo(cuts[i].first, cuts[i].second);
+	}
+
+	before = previous;
+	hasBefore = true;
+}
+
+void AudioTimeline::ToggleCompare()
+{
+	if (!hasBefore) {
+		return;
+	}
+	std::swap(segments, before.segments);
+	std::swap(gain, before.gain);
+	comparing = !comparing;
 }
 
 void AudioTimeline::Undo()
 {
+	if (comparing) {
+		ToggleCompare();
+	}
+	hasBefore = false;
 	if (!undoStack.isEmpty()) {
 		EditState state = undoStack.takeLast();
 		segments = state.segments;

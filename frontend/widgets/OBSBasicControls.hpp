@@ -19,6 +19,9 @@ class OBSBasicControls : public QFrame {
 	bool broadcastFlowEnabled = false;
 	bool replayBufferEnabled = false;
 	bool virtualCamEnabled = false;
+	bool recordingActive = false;
+
+	void UpdateRecordText();
 
 	QScopedPointer<QMenu> streamButtonMenu;
 	QPointer<QAction> startStreamAction;

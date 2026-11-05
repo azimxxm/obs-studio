@@ -17,6 +17,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QListWidget>
 #include <QMediaPlayer>
@@ -42,6 +43,12 @@ QString FormatDuration(double seconds)
 	}
 	int total = int(seconds + 0.5);
 	return QStringLiteral("%1:%2").arg(total / 60).arg(total % 60, 2, 10, QLatin1Char('0'));
+}
+
+/* "   ⌘P" so the button shows its own shortcut */
+QString ShortcutSuffix(QKeyCombination key)
+{
+	return QStringLiteral("   ") + QKeySequence(key).toString(QKeySequence::NativeText);
 }
 
 QString FormatWhen(const QDateTime &time)
@@ -81,8 +88,8 @@ TakesPanel::TakesPanel(QWidget *parent) : QWidget(parent)
 	emptyLabel->setStyleSheet("color: #9a9aa4; padding: 16px;");
 
 	playButton = new QPushButton(this);
-	deleteButton = new QPushButton(QTStr("Takes.Delete"), this);
-	finderButton = new QPushButton(QTStr("Takes.ShowInFinder"), this);
+	deleteButton = new QPushButton(QTStr("Takes.Delete") + ShortcutSuffix(Qt::CTRL | Qt::Key_Backspace), this);
+	finderButton = new QPushButton(QTStr("Takes.ShowInFinder") + ShortcutSuffix(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this);
 	editButton = new QPushButton(QTStr("Takes.EditJoin"), this);
 	editButton->setProperty("class", "btn-primary");
 	for (QPushButton *button : {playButton, deleteButton, finderButton}) {
@@ -92,9 +99,6 @@ TakesPanel::TakesPanel(QWidget *parent) : QWidget(parent)
 	playButton->setToolTip(QTStr("Takes.PlayTip"));
 	deleteButton->setToolTip(QTStr("Takes.DeleteTip"));
 
-	auto *shortcutHint = new QLabel(QTStr("Takes.Shortcuts"), this);
-	shortcutHint->setWordWrap(true);
-	shortcutHint->setStyleSheet("color: #8a8a94; font-size: 11px;");
 
 	auto *header = new QHBoxLayout;
 	header->addWidget(title);
@@ -114,7 +118,6 @@ TakesPanel::TakesPanel(QWidget *parent) : QWidget(parent)
 	layout->addLayout(rowButtons);
 	layout->addWidget(finderButton);
 	layout->addWidget(editButton);
-	layout->addWidget(shortcutHint);
 
 	player = new QMediaPlayer(this);
 	audioOutput = new QAudioOutput(this);
@@ -322,9 +325,11 @@ void TakesPanel::UpdateButtons()
 	int selected = int(list->selectedItems().size());
 	bool hasTakes = list->count() > 0;
 
-	playButton->setText(playingPath.isEmpty() ? QTStr("Takes.Play") : QTStr("Takes.Stop"));
+	playButton->setText((playingPath.isEmpty() ? QTStr("Takes.Play") : QTStr("Takes.Stop")) +
+			    ShortcutSuffix(Qt::CTRL | Qt::Key_P));
 	playButton->setEnabled(hasTakes);
 	deleteButton->setEnabled(selected > 0);
 	editButton->setEnabled(hasTakes);
-	editButton->setText(selected > 1 ? QTStr("Takes.EditJoinCount").arg(selected) : QTStr("Takes.EditJoin"));
+	editButton->setText((selected > 1 ? QTStr("Takes.EditJoinCount").arg(selected) : QTStr("Takes.EditJoin")) +
+			    QStringLiteral("   E"));
 }

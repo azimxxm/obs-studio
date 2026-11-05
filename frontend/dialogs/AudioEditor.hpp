@@ -5,7 +5,10 @@
 #include <QDialog>
 #include <QPointer>
 
+#include <functional>
+
 class QAudioSink;
+class QMenu;
 class QLabel;
 class QPushButton;
 class QTimer;
@@ -35,6 +38,8 @@ private slots:
 	void CutSelection();
 	void UndoCut();
 	void NormalizeVolume();
+	void PolishVoice();
+	void ToggleCompare();
 	void Export();
 	void UpdatePlayhead();
 	void UpdateInfo();
@@ -52,6 +57,12 @@ private:
 	QPushButton *cutButton = nullptr;
 	QPushButton *undoButton = nullptr;
 	QPushButton *normalizeButton = nullptr;
+	QPushButton *polishButton = nullptr;
+	QPushButton *effectsButton = nullptr;
+	QPushButton *compareButton = nullptr;
+	QPushButton *selectToolButton = nullptr;
+	QPushButton *handToolButton = nullptr;
+	bool processing = false;
 	QPushButton *exportButton = nullptr;
 
 	QAudioSink *sink = nullptr;
@@ -59,6 +70,18 @@ private:
 	QTimer *playheadTimer = nullptr;
 
 	void LoadTakes();
+	QMenu *CreateEffectsMenu();
+	/* work runs on a background thread with a copy of the audio; it may fill
+	 * cuts with parts to remove from the processed audio */
+	using EffectWork = std::function<bool(std::vector<float> &samples, int channels,
+					      QVector<QPair<qint64, qint64>> &cuts)>;
+	void RunEffect(const QString &name, EffectWork work);
+	/* runs work only on the selected part when there is one */
+	EffectWork OnSelection(EffectWork work) const;
+	void ApplyFade(bool fadeIn);
+	void ChangeVolume();
+	static double LoudnessTarget();
+	static void SetLoudnessTarget(double lufs);
 	void StartPlayback(qint64 from, qint64 to);
 	void StopPlayback();
 	bool IsPlaying() const { return sink != nullptr; }

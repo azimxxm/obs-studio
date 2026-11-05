@@ -548,7 +548,8 @@ void OBSBasic::ToggleRecordingFromShortcut()
 	}
 }
 
-/* Cmd+R records / stops, Cmd+P listens to the last take, Cmd+Backspace throws it away. */
+/* Cmd+R records / stops, Cmd+P listens to the last take, Cmd+Backspace throws it away,
+ * E opens the editor, Shift+Cmd+R shows the take in Finder. */
 void OBSBasic::CreateAudioOnlyShortcuts()
 {
 	auto add = [this](const QKeySequence &key, auto slot) {
@@ -561,6 +562,16 @@ void OBSBasic::CreateAudioOnlyShortcuts()
 	add(QKeySequence(Qt::CTRL | Qt::Key_P), [this]() {
 		if (takesPanel && !RecordingActive()) {
 			takesPanel->PlayLatest();
+		}
+	});
+	add(QKeySequence(Qt::Key_E), [this]() {
+		if (takesPanel && !RecordingActive()) {
+			takesPanel->OpenEditor();
+		}
+	});
+	add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), [this]() {
+		if (takesPanel) {
+			takesPanel->ShowSelectedInFinder();
 		}
 	});
 	add(QKeySequence(Qt::CTRL | Qt::Key_Backspace), [this]() {
