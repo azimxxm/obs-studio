@@ -61,6 +61,18 @@ void WaveformView::ClearSelection()
 	update();
 }
 
+void WaveformView::SelectAll()
+{
+	if (!timeline || timeline->TotalFrames() == 0) {
+		return;
+	}
+	selectionStart = 0;
+	selectionEnd = timeline->TotalFrames();
+	cursor = 0;
+	emit SelectionChanged();
+	update();
+}
+
 void WaveformView::SetPlayhead(qint64 frame)
 {
 	playhead = frame;
@@ -241,6 +253,16 @@ void WaveformView::mouseReleaseEvent(QMouseEvent *event)
 		cursor = selectionStart;
 	}
 	update();
+}
+
+void WaveformView::mouseDoubleClickEvent(QMouseEvent *event)
+{
+	if (event->button() != Qt::LeftButton) {
+		return;
+	}
+	/* the release after a double click must not turn this back into a click */
+	dragging = false;
+	SelectAll();
 }
 
 void WaveformView::wheelEvent(QWheelEvent *event)

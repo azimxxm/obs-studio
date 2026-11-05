@@ -4,6 +4,8 @@
 
 #include <OBSApp.hpp>
 
+#include <cmath>
+
 #include <QApplication>
 #include <QAudioFormat>
 #include <QAudioSink>
@@ -25,6 +27,8 @@
 
 namespace {
 constexpr int kPlayheadIntervalMs = 30;
+/* same target Audacity uses by default, leaves a little room so nothing clips */
+constexpr float kNormalizeTargetDb = -1.0f;
 
 QString FormatTime(qint64 frames, bool withTenths)
 {
@@ -59,6 +63,8 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 	playSelectionButton = new QPushButton(QTStr("AudioEditor.PlaySelection"), this);
 	cutButton = new QPushButton(QTStr("AudioEditor.Cut"), this);
 	undoButton = new QPushButton(QTStr("AudioEditor.Undo"), this);
+	normalizeButton = new QPushButton(QTStr("AudioEditor.Normalize"), this);
+	normalizeButton->setToolTip(QTStr("AudioEditor.NormalizeTip"));
 	auto *zoomInButton = new QPushButton("+", this);
 	auto *zoomOutButton = new QPushButton("−", this);
 	auto *fitButton = new QPushButton(QTStr("AudioEditor.Fit"), this);
@@ -77,6 +83,7 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 	tools->addSpacing(16);
 	tools->addWidget(cutButton);
 	tools->addWidget(undoButton);
+	tools->addWidget(normalizeButton);
 	tools->addSpacing(16);
 	tools->addWidget(zoomOutButton);
 	tools->addWidget(zoomInButton);
@@ -103,6 +110,7 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 	connect(playSelectionButton, &QPushButton::clicked, this, &AudioEditor::PlaySelection);
 	connect(cutButton, &QPushButton::clicked, this, &AudioEditor::CutSelection);
 	connect(undoButton, &QPushButton::clicked, this, &AudioEditor::UndoCut);
+	connect(normalizeButton, &QPushButton::clicked, this, &AudioEditor::NormalizeVolume);
 	connect(zoomInButton, &QPushButton::clicked, waveform, &WaveformView::ZoomIn);
 	connect(zoomOutButton, &QPushButton::clicked, waveform, &WaveformView::ZoomOut);
 	connect(fitButton, &QPushButton::clicked, waveform, &WaveformView::ZoomToFit);
@@ -126,6 +134,8 @@ AudioEditor::AudioEditor(const QStringList &paths_, const QString &exportFolder_
 	addShortcut(QKeySequence(Qt::Key_Delete), &AudioEditor::CutSelection);
 	addShortcut(QKeySequence(Qt::Key_Backspace), &AudioEditor::CutSelection);
 	addShortcut(QKeySequence::Undo, &AudioEditor::UndoCut);
+	auto *selectAll = new QShortcut(QKeySequence::SelectAll, this);
+	connect(selectAll, &QShortcut::activated, waveform, &WaveformView::SelectAll);
 	addShortcut(QKeySequence::Save, &AudioEditor::Export);
 
 	for (QPushButton *button : findChildren<QPushButton *>()) {
@@ -263,6 +273,15 @@ void AudioEditor::UndoCut()
 	UpdateInfo();
 }
 
+void AudioEditor::NormalizeVolume()
+{
+	StopPlayback();
+	if (timeline.Normalize(kNormalizeTargetDb)) {
+		waveform->update();
+	}
+	UpdateInfo();
+}
+
 void AudioEditor::UpdatePlayhead()
 {
 	if (!sink || !device) {
@@ -284,6 +303,7 @@ void AudioEditor::UpdateInfo()
 	playSelectionButton->setEnabled(hasSelection);
 	cutButton->setEnabled(hasSelection);
 	undoButton->setEnabled(timeline.CanUndo());
+	normalizeButton->setEnabled(hasAudio);
 	exportButton->setEnabled(hasAudio);
 
 	if (!hasAudio) {
@@ -291,6 +311,11 @@ void AudioEditor::UpdateInfo()
 	}
 	QString text = QTStr("AudioEditor.Total").arg(FormatTime(timeline.TotalFrames(), false));
 	text += QStringLiteral("   ·   ") + QTStr("AudioEditor.Takes").arg(timeline.Sources().size());
+	float gainDb = timeline.GainDb();
+	if (std::fabs(gainDb) >= 0.1f) {
+		text += QStringLiteral("   ·   ") + QTStr("AudioEditor.Volume")
+					.arg((gainDb > 0 ? QStringLiteral("+") : QString()) + QString::number(gainDb, 'f', 1));
+	}
 	if (hasSelection) {
 		text += QStringLiteral("   ·   ") +
 			QTStr("AudioEditor.Selected")

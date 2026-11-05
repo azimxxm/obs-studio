@@ -19,6 +19,7 @@ public:
 	qint64 SelectionStart() const { return selectionStart; }
 	qint64 SelectionEnd() const { return selectionEnd; }
 	void ClearSelection();
+	void SelectAll();
 
 	qint64 Cursor() const { return cursor; }
 	void SetPlayhead(qint64 frame);
@@ -36,6 +37,7 @@ protected:
 	void mousePressEvent(QMouseEvent *event) override;
 	void mouseMoveEvent(QMouseEvent *event) override;
 	void mouseReleaseEvent(QMouseEvent *event) override;
+	void mouseDoubleClickEvent(QMouseEvent *event) override;
 	void wheelEvent(QWheelEvent *event) override;
 
 private:

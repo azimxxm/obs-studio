@@ -34,6 +34,7 @@ private slots:
 	void PlaySelection();
 	void CutSelection();
 	void UndoCut();
+	void NormalizeVolume();
 	void Export();
 	void UpdatePlayhead();
 	void UpdateInfo();
@@ -50,6 +51,7 @@ private:
 	QPushButton *playSelectionButton = nullptr;
 	QPushButton *cutButton = nullptr;
 	QPushButton *undoButton = nullptr;
+	QPushButton *normalizeButton = nullptr;
 	QPushButton *exportButton = nullptr;
 
 	QAudioSink *sink = nullptr;

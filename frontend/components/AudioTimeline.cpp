@@ -112,6 +112,7 @@ bool AudioTimeline::Load(const QStringList &paths, QString &error)
 	sources.clear();
 	segments.clear();
 	undoStack.clear();
+	gain = 1.0f;
 
 	/* WAV takes tell us their channel count, other formats are treated as stereo */
 	channels = 1;
@@ -258,7 +259,7 @@ float AudioTimeline::PeakAt(qint64 from, qint64 to) const
 		}
 		segmentStart = segmentEnd;
 	}
-	return peak;
+	return peak * gain;
 }
 
 float AudioTimeline::FadeGain(qint64 position) const
@@ -292,6 +293,12 @@ qint64 AudioTimeline::Read(qint64 position, float *out, qint64 frameCount) const
 		segmentStart = segmentEnd;
 	}
 
+	if (gain != 1.0f) {
+		for (qint64 i = 0; i < copied * channels; i++) {
+			out[i] *= gain;
+		}
+	}
+
 	/* soften the joins; only frames near a boundary are touched */
 	for (qint64 boundary : Boundaries()) {
 		qint64 first = std::max(position, boundary - kFadeFrames);
@@ -314,7 +321,7 @@ void AudioTimeline::Cut(qint64 from, qint64 to)
 		return;
 	}
 
-	undoStack.append(segments);
+	SaveUndoState();
 
 	QVector<AudioSegment> kept;
 	qint64 segmentStart = 0;
@@ -338,11 +345,54 @@ void AudioTimeline::Cut(qint64 from, qint64 to)
 	segments = kept;
 }
 
+void AudioTimeline::SaveUndoState()
+{
+	undoStack.append({segments, gain});
+}
+
 void AudioTimeline::Undo()
 {
 	if (!undoStack.isEmpty()) {
-		segments = undoStack.takeLast();
+		EditState state = undoStack.takeLast();
+		segments = state.segments;
+		gain = state.gain;
 	}
+}
+
+/* loudest sample of what is left on the timeline, before our gain */
+float AudioTimeline::RawPeak() const
+{
+	float peak = 0.0f;
+	for (const AudioSegment &segment : segments) {
+		const AudioSourceClip &clip = sources[size_t(segment.source)];
+		const float *data = clip.samples.data();
+		for (qint64 i = segment.start * channels; i < segment.end * channels; i++) {
+			peak = std::max(peak, std::fabs(data[i]));
+		}
+	}
+	return peak;
+}
+
+bool AudioTimeline::Normalize(float targetDb)
+{
+	float peak = RawPeak();
+	if (peak <= 0.0f) {
+		return false;
+	}
+
+	float newGain = std::pow(10.0f, targetDb / 20.0f) / peak;
+	if (std::fabs(newGain - gain) < 1e-4f) {
+		return false;
+	}
+
+	SaveUndoState();
+	gain = newGain;
+	return true;
+}
+
+float AudioTimeline::GainDb() const
+{
+	return 20.0f * std::log10(gain);
 }
 
 bool AudioTimeline::ExportWav(const QString &path, QString &error) const

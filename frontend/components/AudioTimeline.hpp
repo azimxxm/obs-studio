@@ -49,6 +49,9 @@ public:
 	qint64 Read(qint64 position, float *out, qint64 frameCount) const;
 
 	void Cut(qint64 from, qint64 to);
+	/* raises the volume so the loudest point sits at targetDb, like Audacity's Normalize */
+	bool Normalize(float targetDb);
+	float GainDb() const;
 	bool CanUndo() const { return !undoStack.isEmpty(); }
 	void Undo();
 
@@ -57,12 +60,20 @@ public:
 private:
 	int channels = 1;
 	std::vector<AudioSourceClip> sources;
+	struct EditState {
+		QVector<AudioSegment> segments;
+		float gain = 1.0f;
+	};
+
 	QVector<AudioSegment> segments;
-	QVector<QVector<AudioSegment>> undoStack;
+	float gain = 1.0f;
+	QVector<EditState> undoStack;
 
 	bool Decode(const QString &path, AudioSourceClip &clip, QString &error) const;
 	static void BuildPeaks(AudioSourceClip &clip, int channels);
 	float FadeGain(qint64 position) const;
+	float RawPeak() const;
+	void SaveUndoState();
 };
 
 /* Feeds the timeline to QAudioSink while the user listens in the editor. */
