@@ -101,6 +101,14 @@ target_sources(
     components/MicrophoneButton.hpp
     components/NarratorSession.cpp
     components/NarratorSession.hpp
+    components/PanelGrip.cpp
+    components/PanelGrip.hpp
+    components/RecordButton.cpp
+    components/RecordButton.hpp
+    components/ScriptMarkup.cpp
+    components/ScriptMarkup.hpp
+    components/ScriptView.cpp
+    components/ScriptView.hpp
     components/TakesPanel.cpp
     components/TakesPanel.hpp
     components/Teleprompter.cpp

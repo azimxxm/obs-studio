@@ -6,12 +6,16 @@
 
 #include <components/MicrophoneButton.hpp>
 #include <components/NarratorSession.hpp>
+#include <components/PanelGrip.hpp>
+#include <components/RecordButton.hpp>
 #include <components/TakesPanel.hpp>
 #include <components/Teleprompter.hpp>
 #include <utility/AudioFilterOrder.hpp>
 
+#include <QPushButton>
 #include <QShortcut>
 #include <QSplitter>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <qt-wrappers.hpp>
@@ -93,6 +97,11 @@ void OBSBasic::ApplyAudioOnlyDocks(bool audioOnly)
 	ui->sourcesDock->setVisible(!audioOnly && config_get_bool(appConfig, section, "SourcesDockVisible"));
 	ui->transitionsDock->setVisible(!audioOnly && config_get_bool(appConfig, section, "TransitionsDockVisible"));
 
+	/* the mixer and the record controls are hidden in audio mode unless the narrator
+	 * asked for them (Mixer ⌘J); video mode always gets them back */
+	config_set_default_bool(appConfig, "AudioOnly", "BottomPanelsVisible", false);
+	ShowBottomPanels(!audioOnly || config_get_bool(appConfig, "AudioOnly", "BottomPanelsVisible"));
+
 	/* A wide horizontal meter is much easier to read for a narrator */
 	bool vertical = audioOnly ? false : config_get_bool(appConfig, section, "VerticalVolumeControl");
 	if (vertical != config_get_bool(appConfig, "BasicWindow", "VerticalVolumeControl")) {
@@ -118,6 +127,14 @@ void OBSBasic::CreateAudioOnlyWorkspace(QBoxLayout *centralLayout)
 	if (centralLayout) {
 		centralLayout->addWidget(audioOnlySplitter, 1);
 	}
+	CreatePanelGrip(centralLayout);
+	CreateCompactBar();
+	CreateTakesToggle();
+	CreatePanelsToggle();
+	/* last in the row, after Takes and Mixer */
+	auto *settingsButton = new QPushButton(QTStr("Settings"), teleprompter);
+	teleprompter->AddToolbarButton(settingsButton);
+	connect(settingsButton, &QPushButton::clicked, this, &OBSBasic::on_action_Settings_triggered);
 
 	/* the countdown runs on top of the teleprompter; the text starts moving after it */
 	narrator = new NarratorSession(teleprompter, this);
@@ -136,6 +153,148 @@ void OBSBasic::CreateAudioOnlyWorkspace(QBoxLayout *centralLayout)
 	/* don't play an old take into the microphone while recording a new one */
 	connect(this, &OBSBasic::RecordingStarted, takesPanel, &TakesPanel::StopPlayback);
 	connect(this, &OBSBasic::RecordingStopped, takesPanel, &TakesPanel::RefreshAfterRecording);
+}
+
+/* "Takes ⌘T" at the right end of the teleprompter's row shows or hides the
+ * takes list, so the script can use the whole width. The choice is remembered. */
+void OBSBasic::CreateTakesToggle()
+{
+	constexpr const char *section = "AudioOnly";
+	constexpr const char *key = "TakesPanelVisible";
+	config_t *config = App()->GetUserConfig();
+	config_set_default_bool(config, section, key, true);
+
+	QKeySequence shortcut(Qt::CTRL | Qt::Key_T);
+	takesToggle = new QPushButton(QTStr("AudioOnly.TakesToggle") + QStringLiteral("   ") +
+					      shortcut.toString(QKeySequence::NativeText),
+				      teleprompter);
+	takesToggle->setToolTip(QTStr("AudioOnly.TakesToggleTip"));
+	takesToggle->setCheckable(true);
+	teleprompter->AddToolbarButton(takesToggle);
+
+	bool visible = config_get_bool(config, section, key);
+	takesToggle->setChecked(visible);
+	takesPanel->setVisible(visible);
+
+	connect(takesToggle, &QPushButton::toggled, this, [this, config, section, key](bool show) {
+		takesPanel->setVisible(show);
+		config_set_bool(config, section, key, show);
+	});
+}
+
+/* "Mixer ⌘J" shows or hides the Audio Mixer and Controls panels under the script */
+void OBSBasic::CreatePanelsToggle()
+{
+	config_t *config = App()->GetUserConfig();
+	QKeySequence shortcut(Qt::CTRL | Qt::Key_J);
+	panelsToggle = new QPushButton(QTStr("AudioOnly.PanelsToggle") + QStringLiteral("   ") +
+					       shortcut.toString(QKeySequence::NativeText),
+				       teleprompter);
+	panelsToggle->setToolTip(QTStr("AudioOnly.PanelsToggleTip"));
+	panelsToggle->setCheckable(true);
+	panelsToggle->setChecked(config_get_bool(config, "AudioOnly", "BottomPanelsVisible"));
+	teleprompter->AddToolbarButton(panelsToggle);
+
+	connect(panelsToggle, &QPushButton::toggled, this, [this, config](bool show) {
+		ShowBottomPanels(show);
+		config_set_bool(config, "AudioOnly", "BottomPanelsVisible", show);
+	});
+	/* the mixer can also be opened from the Docks menu, keep the button in step */
+	connect(ui->mixerDock->toggleViewAction(), &QAction::toggled, panelsToggle, [this](bool visible) {
+		if (IsAudioOnlyMode() && panelsToggle->isChecked() != visible) {
+			QSignalBlocker blocker(panelsToggle);
+			panelsToggle->setChecked(visible);
+			config_set_bool(App()->GetUserConfig(), "AudioOnly", "BottomPanelsVisible", visible);
+		}
+	});
+}
+
+namespace {
+constexpr const char *kPanelsSection = "AudioOnly";
+constexpr const char *kPanelsHeightKey = "BottomPanelsHeight";
+constexpr int kDefaultPanelsHeight = 200;
+/* dragged less than this the panels close, the mixer is useless any smaller */
+constexpr int kMinPanelsHeight = 90;
+} // namespace
+
+void OBSBasic::ShowBottomPanels(bool show)
+{
+	bool wasVisible = ui->mixerDock->isVisible();
+	ui->mixerDock->setVisible(show);
+	if (controlsDock) {
+		controlsDock->setVisible(show);
+	}
+	/* while the grip is dragged it sets the height itself */
+	if (!show || wasVisible || gripDragging || !IsAudioOnlyMode()) {
+		return;
+	}
+	/* open at the height they had last time; the docks need a moment to lay out first */
+	config_t *config = App()->GetUserConfig();
+	config_set_default_int(config, kPanelsSection, kPanelsHeightKey, kDefaultPanelsHeight);
+	int height = (int)config_get_int(config, kPanelsSection, kPanelsHeightKey);
+	QTimer::singleShot(0, this, [this, height]() { ResizeBottomPanels(height); });
+}
+
+void OBSBasic::ResizeBottomPanels(int height)
+{
+	QList<QDockWidget *> docks{ui->mixerDock};
+	if (controlsDock) {
+		docks.append(controlsDock);
+	}
+	QList<int> heights(docks.size(), height);
+	resizeDocks(docks, heights, Qt::Vertical);
+}
+
+void OBSBasic::CreatePanelGrip(QBoxLayout *centralLayout)
+{
+	panelGrip = new PanelGrip(ui->centralwidget);
+	panelGrip->setToolTip(QTStr("AudioOnly.PanelGripTip"));
+	if (centralLayout) {
+		centralLayout->addWidget(panelGrip);
+	}
+
+	panelGrip->onPress = [this]() {
+		gripDragging = true;
+		gripStartHeight = ui->mixerDock->isVisible() ? ui->mixerDock->height() : 0;
+	};
+	panelGrip->onDrag = [this](int movedUp) {
+		int height = gripStartHeight + movedUp;
+		bool open = height >= kMinPanelsHeight;
+		if (panelsToggle && panelsToggle->isChecked() != open) {
+			/* the toggle opens or closes the panels and remembers the choice */
+			panelsToggle->setChecked(open);
+		}
+		if (open) {
+			ResizeBottomPanels(height);
+		}
+	};
+	panelGrip->onRelease = [this]() {
+		gripDragging = false;
+		if (ui->mixerDock->isVisible()) {
+			config_set_int(App()->GetUserConfig(), kPanelsSection, kPanelsHeightKey, ui->mixerDock->height());
+		}
+	};
+}
+
+/* With the mixer and the controls hidden, the teleprompter's row holds what is
+ * left of them: "● Record ⌘R" with the time, the microphone with its level
+ * line, and a Settings button at the right end. */
+void OBSBasic::CreateCompactBar()
+{
+	recordButton = new RecordButton(teleprompter);
+	teleprompter->AddToolbarButton(recordButton, Teleprompter::ToolbarSide::Start);
+	connect(recordButton, &QPushButton::clicked, this, &OBSBasic::ToggleRecordingFromShortcut);
+	connect(this, &OBSBasic::RecordingStarted, recordButton, [this]() {
+		recordButton->RecordingStarted();
+		teleprompter->SetRecording(true);
+	});
+	connect(this, &OBSBasic::RecordingPaused, recordButton, [this]() { recordButton->RecordingPaused(); });
+	connect(this, &OBSBasic::RecordingUnpaused, recordButton, [this]() { recordButton->RecordingUnpaused(); });
+	connect(this, &OBSBasic::RecordingStopped, recordButton, [this]() {
+		recordButton->RecordingStopped();
+		teleprompter->SetRecording(false);
+	});
+
 }
 
 void OBSBasic::ToggleRecordingFromShortcut()
@@ -197,6 +356,16 @@ void OBSBasic::CreateAudioOnlyShortcuts()
 			takesPanel->ShowSelectedInFinder();
 		}
 	});
+	add(QKeySequence(Qt::CTRL | Qt::Key_J), [this]() {
+		if (panelsToggle) {
+			panelsToggle->toggle();
+		}
+	});
+	add(QKeySequence(Qt::CTRL | Qt::Key_T), [this]() {
+		if (takesToggle) {
+			takesToggle->toggle();
+		}
+	});
 	add(QKeySequence(Qt::CTRL | Qt::Key_Backspace), [this]() {
 		if (takesPanel && !RecordingActive()) {
 			takesPanel->DeleteLatest();
@@ -217,6 +386,9 @@ void OBSBasic::ApplyAudioOnlyCentralArea(bool audioOnly)
 	}
 	if (audioOnlySplitter) {
 		audioOnlySplitter->setVisible(audioOnly);
+	}
+	if (panelGrip) {
+		panelGrip->setVisible(audioOnly);
 	}
 	if (takesPanel && !audioOnly) {
 		takesPanel->StopPlayback();

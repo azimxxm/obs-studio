@@ -11,17 +11,21 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
-#include <QTextEdit>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QSlider>
 #include <QTextFrame>
 #include <QTextFrameFormat>
+#include <QTextBlock>
+#include <QTextCursor>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include <qt-wrappers.hpp>
 #include <util/platform.h>
+
+#include "ScriptView.hpp"
 
 #include "moc_Teleprompter.cpp"
 
@@ -35,6 +39,7 @@ constexpr int kMaxSpeed = 10;
 constexpr int kTimerIntervalMs = 16;
 /* pixels per second for speed 1, grows linearly with the slider */
 constexpr double kPixelsPerSecondPerStep = 12.0;
+/* the first line starts a third of the way down, where the eye reads */
 constexpr double kReadingGuideRatio = 0.33;
 /* wide enough to fill a maximized window, the side margins only keep text off the edges */
 constexpr int kMaxColumnWidth = 2400;
@@ -42,6 +47,8 @@ constexpr int kMinSideMargin = 32;
 constexpr int kToolbarButtonHeight = 36;
 constexpr int kToolbarFontPx = 13;
 constexpr int kPlayButtonWidth = 140;
+constexpr double kEditMargin = 24.0;
+const char *const kEmphasisButtonColor = "#ffa23f";
 constexpr const char *kConfigSection = "Teleprompter";
 } // namespace
 
@@ -50,7 +57,7 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	setObjectName("teleprompter");
 	setFocusPolicy(Qt::StrongFocus);
 
-	textView = new QTextEdit(this);
+	textView = new ScriptView(this);
 	textView->setObjectName("teleprompterText");
 	textView->setFrameShape(QFrame::NoFrame);
 	textView->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -59,14 +66,6 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	textView->setPlaceholderText(QTStr("Teleprompter.Placeholder"));
 	textView->viewport()->installEventFilter(this);
 
-	/* Thin band at one third of the height: the line to read sits here */
-	readingGuide = new QWidget(textView->viewport());
-	readingGuide->setObjectName("teleprompterGuide");
-	readingGuide->setAttribute(Qt::WA_TransparentForMouseEvents);
-	readingGuide->setStyleSheet("background-color: rgba(120, 160, 255, 40);"
-				    "border-top: 1px solid rgba(120, 160, 255, 120);"
-				    "border-bottom: 1px solid rgba(120, 160, 255, 120);");
-
 	/* Shown in the middle of the text area until a script is added */
 	emptyHint = new QLabel(QTStr("Teleprompter.EmptyHint"), textView->viewport());
 	emptyHint->setAlignment(Qt::AlignCenter);
@@ -74,8 +73,12 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	emptyHint->setAttribute(Qt::WA_TransparentForMouseEvents);
 	emptyHint->setStyleSheet("color: #b0b0b8; font-size: 17px;");
 
-	auto *openButton = new QPushButton(QTStr("Teleprompter.Open"), this);
 	editButton = new QPushButton(this);
+	openButton = new QPushButton(QTStr("Teleprompter.Open"), this);
+	followVoiceBox = new QCheckBox(QTStr("Teleprompter.FollowVoice"), this);
+	followVoiceBox->setToolTip(QTStr("Teleprompter.FollowVoiceTip"));
+	followVoiceBox->setFocusPolicy(Qt::NoFocus);
+	followVoiceBox->setStyleSheet(QStringLiteral("font-size: %1px;").arg(kToolbarFontPx));
 	playButton = new QPushButton(this);
 	playButton->setProperty("class", "btn-primary");
 	auto *topButton = new QPushButton(QTStr("Teleprompter.ToStart"), this);
@@ -92,29 +95,25 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	speedSlider->setFixedWidth(160);
 	speedSlider->setToolTip(QTStr("Teleprompter.Speed"));
 
-	followVoiceBox = new QCheckBox(QTStr("Teleprompter.FollowVoice"), this);
-	followVoiceBox->setToolTip(QTStr("Teleprompter.FollowVoiceTip"));
-	followVoiceBox->setFocusPolicy(Qt::NoFocus);
-
 	/* one height and one text size for every button in the bar */
-	for (QPushButton *button : {openButton, editButton, topButton, playButton, smallerButton, biggerButton}) {
+	for (QPushButton *button : {editButton, openButton, topButton, playButton, smallerButton, biggerButton}) {
+		button->setFocusPolicy(Qt::NoFocus);
 		button->setFixedHeight(kToolbarButtonHeight);
 		button->setStyleSheet(QStringLiteral("font-size: %1px; padding: 0 14px;").arg(kToolbarFontPx));
 	}
 	/* Start Scrolling / Pause swap text, a fixed width stops the bar from jumping */
 	playButton->setMinimumWidth(kPlayButtonWidth);
-	followVoiceBox->setStyleSheet(QStringLiteral("font-size: %1px;").arg(kToolbarFontPx));
 
 	toolbar = new QHBoxLayout();
 	toolbar->setContentsMargins(8, 8, 8, 8);
 	toolbar->setSpacing(8);
-	toolbar->addWidget(openButton);
 	toolbar->addWidget(editButton);
+	toolbar->addWidget(openButton);
+	toolbar->addSpacing(4);
+	toolbar->addWidget(followVoiceBox);
 	toolbar->addStretch();
 	toolbar->addWidget(topButton);
 	toolbar->addWidget(playButton);
-	toolbar->addSpacing(12);
-	toolbar->addWidget(followVoiceBox);
 	toolbar->addSpacing(12);
 	auto *speedLabel = new QLabel(QTStr("Teleprompter.Speed"), this);
 	speedLabel->setStyleSheet(QStringLiteral("font-size: %1px;").arg(kToolbarFontPx));
@@ -124,9 +123,12 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	toolbar->addWidget(smallerButton);
 	toolbar->addWidget(biggerButton);
 
+	BuildFormatBar();
+
 	auto *layout = new QVBoxLayout(this);
 	layout->setContentsMargins(0, 0, 0, 0);
 	layout->setSpacing(0);
+	layout->addWidget(formatBar);
 	layout->addWidget(textView, 1);
 	layout->addLayout(toolbar);
 
@@ -141,6 +143,7 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 	connect(smallerButton, &QPushButton::clicked, this, &Teleprompter::SmallerText);
 	connect(biggerButton, &QPushButton::clicked, this, &Teleprompter::BiggerText);
 	connect(textView, &QTextEdit::textChanged, this, &Teleprompter::UpdateEmptyState);
+	connect(textView, &QTextEdit::cursorPositionChanged, this, &Teleprompter::UpdateFormatButtons);
 
 	LoadState();
 	ApplyReadingStyle();
@@ -151,6 +154,150 @@ Teleprompter::Teleprompter(QWidget *parent) : QWidget(parent)
 Teleprompter::~Teleprompter()
 {
 	SaveState();
+}
+
+/* The marking buttons: select text, click a button, see the result right away */
+void Teleprompter::BuildFormatBar()
+{
+	formatBar = new QWidget(this);
+	auto *bar = new QHBoxLayout(formatBar);
+	bar->setContentsMargins(8, 8, 8, 8);
+	bar->setSpacing(8);
+
+	/* every button has a Cmd + number key, shown on the button like A+ and A- do;
+	 * the keys only work while the bar is shown, so only while editing */
+	auto addButton = [&](const char *name, Qt::Key keyName, bool checkable, const QString &extraStyle = QString()) {
+		QKeySequence shortcut(Qt::CTRL | keyName);
+		QString keyText = shortcut.toString(QKeySequence::NativeText);
+		QString label = QTStr(QString("Teleprompter.Format.%1").arg(name).toUtf8().constData());
+		auto *button = new QPushButton(label + QStringLiteral("   ") + keyText, formatBar);
+		/* a button's own shortcut clicks it ~100 ms later, by then the selection may be another one */
+		auto *key = new QShortcut(shortcut, formatBar);
+		connect(key, &QShortcut::activated, button, &QPushButton::click);
+		button->setToolTip(QTStr(QString("Teleprompter.Format.%1Tip").arg(name).toUtf8().constData()) +
+				   QStringLiteral(" (") + keyText + QStringLiteral(")"));
+		button->setCheckable(checkable);
+		/* a click must not take the selection away from the text */
+		button->setFocusPolicy(Qt::NoFocus);
+		button->setFixedHeight(kToolbarButtonHeight);
+		button->setStyleSheet(
+			QStringLiteral("font-size: %1px; padding: 0 14px; %2").arg(kToolbarFontPx).arg(extraStyle));
+		bar->addWidget(button);
+		return button;
+	};
+
+	emphasisButton =
+		addButton("Emphasis", Qt::Key_1, true,
+			  QStringLiteral("color: %1; font-weight: bold;").arg(QLatin1String(kEmphasisButtonColor)));
+	stretchButton = addButton("Stretch", Qt::Key_2, true);
+	auto *pauseButton = addButton("Pause", Qt::Key_3, false);
+	bar->addSpacing(12);
+	hookButton = addButton("Hook", Qt::Key_4, true, QStringLiteral("font-weight: bold;"));
+	toneButton = addButton("Tone", Qt::Key_5, true, QStringLiteral("font-style: italic;"));
+	sceneButton = addButton("Scene", Qt::Key_6, true);
+	bar->addSpacing(12);
+	auto *clearButton = addButton("Clear", Qt::Key_0, false);
+	bar->addStretch();
+
+	using ScriptMarkup::LineKind;
+	using ScriptMarkup::Mark;
+	connect(emphasisButton, &QPushButton::clicked, this, [this]() { ToggleMark(Mark::Emphasis); });
+	connect(stretchButton, &QPushButton::clicked, this, [this]() { ToggleMark(Mark::Stretch); });
+	connect(pauseButton, &QPushButton::clicked, this, &Teleprompter::InsertPause);
+	connect(hookButton, &QPushButton::clicked, this, [this]() { ToggleLineKind(LineKind::Hook); });
+	connect(toneButton, &QPushButton::clicked, this, [this]() { ToggleLineKind(LineKind::Tone); });
+	connect(sceneButton, &QPushButton::clicked, this, [this]() { ToggleLineKind(LineKind::Scene); });
+	connect(clearButton, &QPushButton::clicked, this, &Teleprompter::ClearMarks);
+
+	formatBar->hide();
+}
+
+/* the format the buttons should show: the first selected letter, or what would be typed next */
+QTextCharFormat Teleprompter::FormatAtCursor() const
+{
+	QTextCursor cursor = textView->textCursor();
+	if (!cursor.hasSelection()) {
+		return textView->currentCharFormat();
+	}
+	/* a cursor reports the format of the letter before it */
+	cursor.setPosition(cursor.selectionStart() + 1);
+	return cursor.charFormat();
+}
+
+void Teleprompter::ToggleMark(ScriptMarkup::Mark mark)
+{
+	ScriptMarkup::WordMarks marks = ScriptMarkup::WordMarksOf(FormatAtCursor());
+	bool &flag = mark == ScriptMarkup::Mark::Emphasis ? marks.emphasis : marks.stretch;
+	flag = !flag;
+
+	QTextCursor cursor = textView->textCursor();
+	if (cursor.hasSelection()) {
+		ScriptMarkup::SetMark(cursor, mark, flag, fontSize);
+	} else {
+		/* nothing selected: the mark applies to what is typed next */
+		textView->setCurrentCharFormat(
+			ScriptMarkup::CharFormat(ScriptMarkup::LineKindOf(cursor.block()), marks, fontSize));
+	}
+	UpdateFormatButtons();
+}
+
+void Teleprompter::ToggleLineKind(ScriptMarkup::LineKind kind)
+{
+	QTextCursor cursor = textView->textCursor();
+	QTextBlock firstLine = textView->document()->findBlock(cursor.selectionStart());
+	bool alreadySet = ScriptMarkup::LineKindOf(firstLine) == kind;
+	ScriptMarkup::SetLineKind(cursor, alreadySet ? ScriptMarkup::LineKind::Normal : kind, fontSize);
+	UpdateFormatButtons();
+}
+
+void Teleprompter::InsertPause()
+{
+	QTextCharFormat typingFormat = textView->currentCharFormat();
+	QTextCursor cursor = textView->textCursor();
+	ScriptMarkup::InsertPause(cursor, fontSize);
+	textView->setTextCursor(cursor);
+	/* what is typed after the pause sign is normal text again */
+	textView->setCurrentCharFormat(typingFormat);
+}
+
+void Teleprompter::ClearMarks()
+{
+	ScriptMarkup::ClearMarks(textView->textCursor(), fontSize);
+	UpdateFormatButtons();
+}
+
+void Teleprompter::UpdateFormatButtons()
+{
+	if (!editing) {
+		return;
+	}
+
+	QTextCursor cursor = textView->textCursor();
+	ScriptMarkup::LineKind kind = ScriptMarkup::LineKindOf(textView->document()->findBlock(cursor.selectionStart()));
+	ScriptMarkup::WordMarks marks = ScriptMarkup::WordMarksOf(FormatAtCursor());
+
+	/* typing right behind a pause sign would come out grey like the sign itself */
+	if (marks.pause && !cursor.hasSelection()) {
+		marks.pause = false;
+		textView->setCurrentCharFormat(ScriptMarkup::CharFormat(kind, marks, fontSize));
+	}
+
+	emphasisButton->setChecked(marks.emphasis);
+	stretchButton->setChecked(marks.stretch);
+	hookButton->setChecked(kind == ScriptMarkup::LineKind::Hook);
+	toneButton->setChecked(kind == ScriptMarkup::LineKind::Tone);
+	sceneButton->setChecked(kind == ScriptMarkup::LineKind::Scene);
+}
+
+void Teleprompter::LoadScript(const QString &markup)
+{
+	ScriptMarkup::Load(textView->document(), markup, fontSize);
+	textView->ClearReadCards();
+	/* a fresh document forgets its margins */
+	ApplyReadingStyle();
+	/* loading leaves the cursor at the end and the view would follow it down */
+	textView->moveCursor(QTextCursor::Start);
+	JumpToStart();
 }
 
 QString Teleprompter::ScriptFilePath()
@@ -175,7 +322,7 @@ void Teleprompter::LoadState()
 
 	QFile file(ScriptFilePath());
 	if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-		textView->setPlainText(QString::fromUtf8(file.readAll()));
+		LoadScript(QString::fromUtf8(file.readAll()));
 	}
 }
 
@@ -196,38 +343,39 @@ void Teleprompter::SaveState()
 		blog(LOG_WARNING, "Teleprompter: could not save script to '%s'", QT_TO_UTF8(path));
 		return;
 	}
-	file.write(textView->toPlainText().toUtf8());
+	file.write(ScriptMarkup::Save(textView->document()).toUtf8());
 }
 
 void Teleprompter::ApplyReadingStyle()
 {
 	QFont font = textView->font();
-	font.setPointSize(editing ? 16 : fontSize);
+	font.setPointSize(fontSize);
 	textView->setFont(font);
+	textView->SetBaseFontSize(fontSize);
 	textView->setReadOnly(!editing);
 	textView->setPlaceholderText(editing ? QTStr("Teleprompter.Placeholder") : QString());
 	/* The theme sets a font-size on every widget, so the size has to go in the stylesheet too */
-	textView->setStyleSheet(
-		editing ? QString("QTextEdit#teleprompterText { font-size: 16pt; }")
-			: QString("QTextEdit#teleprompterText { background-color: #16171c; color: #f2f2f2;"
-				  " font-size: %1pt; }")
-				  .arg(fontSize));
+	/* editing looks the same as reading, so every mark shows the moment it is set */
+	textView->setStyleSheet(QString("QTextEdit#teleprompterText { background-color: #16171c; color: #f2f2f2;"
+					" font-size: %1pt; }")
+					.arg(fontSize));
+	formatBar->setVisible(editing);
 	editButton->setText(QTStr(editing ? "Teleprompter.Done" : "Teleprompter.Edit"));
 
 	/* Leave room above and below so the first and last lines can reach the guide,
 	 * and keep the text in a centered column so long lines stay easy to follow */
 	int viewportWidth = textView->viewport()->width();
 	int viewportHeight = textView->viewport()->height();
-	double sideMargin = editing ? 16.0 : std::max(kMinSideMargin, (viewportWidth - kMaxColumnWidth) / 2);
+	double sideMargin = std::max(kMinSideMargin, (viewportWidth - kMaxColumnWidth) / 2);
 
 	QTextFrameFormat frameFormat = textView->document()->rootFrame()->frameFormat();
-	frameFormat.setTopMargin(editing ? 16.0 : viewportHeight * kReadingGuideRatio);
-	frameFormat.setBottomMargin(editing ? 16.0 : viewportHeight * (1.0 - kReadingGuideRatio));
+	frameFormat.setTopMargin(editing ? kEditMargin : viewportHeight * kReadingGuideRatio);
+	frameFormat.setBottomMargin(editing ? kEditMargin : viewportHeight * (1.0 - kReadingGuideRatio));
 	frameFormat.setLeftMargin(sideMargin);
 	frameFormat.setRightMargin(sideMargin);
 	textView->document()->rootFrame()->setFrameFormat(frameFormat);
 
-	PositionReadingGuide();
+	PositionEmptyHint();
 	UpdateEmptyState();
 }
 
@@ -236,7 +384,6 @@ void Teleprompter::UpdateEmptyState()
 	bool empty = textView->toPlainText().trimmed().isEmpty();
 	emptyHint->setVisible(empty && !editing);
 	playButton->setEnabled(!empty);
-	readingGuide->setVisible(!editing && !empty);
 }
 
 void Teleprompter::UpdatePlayButton()
@@ -245,16 +392,8 @@ void Teleprompter::UpdatePlayButton()
 	playButton->setText(QTStr(running ? "Teleprompter.Pause" : "Teleprompter.Play"));
 }
 
-void Teleprompter::PositionReadingGuide()
+void Teleprompter::PositionEmptyHint()
 {
-	/* The first line starts at the top margin, so the guide sits exactly there */
-	QFont readingFont = textView->font();
-	readingFont.setPointSize(editing ? 16 : fontSize);
-	QFontMetrics metrics(readingFont);
-	int padding = 6;
-	int lineHeight = metrics.lineSpacing() + padding * 2;
-	int y = int(textView->viewport()->height() * kReadingGuideRatio) - padding;
-	readingGuide->setGeometry(0, y, textView->viewport()->width(), lineHeight);
 	emptyHint->setGeometry(textView->viewport()->rect().adjusted(48, 0, -48, 0));
 }
 
@@ -323,10 +462,15 @@ void Teleprompter::ToggleEditMode()
 {
 	editing = !editing;
 	StopScrolling();
+	if (!editing) {
+		/* read the script back the way it is saved, so what stays on screen is what is in the file */
+		LoadScript(ScriptMarkup::Save(textView->document()));
+	}
 	ApplyReadingStyle();
 	UpdateEmptyState();
 	if (editing) {
 		textView->setFocus();
+		UpdateFormatButtons();
 	} else {
 		SaveState();
 		setFocus();
@@ -348,7 +492,7 @@ void Teleprompter::OpenTextFile()
 	}
 
 	StopScrolling();
-	textView->setPlainText(QString::fromUtf8(file.readAll()));
+	LoadScript(QString::fromUtf8(file.readAll()));
 	JumpToStart();
 	SaveState();
 }
@@ -365,10 +509,31 @@ void Teleprompter::SetToolbarAccessory(QWidget *widget)
 		button->setStyleSheet(QStringLiteral("font-size: %1px; padding: 0 14px;").arg(kToolbarFontPx));
 	}
 	if (accessory) {
-		/* index 2: right after Open Text File and Edit Script */
-		toolbar->insertWidget(2, accessory);
+		/* right before Edit Script, after a Record button if there is one */
+		toolbar->insertWidget(toolbar->indexOf(editButton), accessory);
 		accessory->show();
 	}
+}
+
+void Teleprompter::AddToolbarButton(QPushButton *button, ToolbarSide side)
+{
+	button->setFixedHeight(kToolbarButtonHeight);
+	if (button->styleSheet().isEmpty()) {
+		button->setStyleSheet(QStringLiteral("font-size: %1px; padding: 0 14px;").arg(kToolbarFontPx));
+	}
+	button->setFocusPolicy(Qt::NoFocus);
+	if (side == ToolbarSide::Start) {
+		toolbar->insertWidget(0, button);
+		return;
+	}
+	toolbar->addWidget(button);
+}
+
+void Teleprompter::SetRecording(bool recording)
+{
+	/* while recording the text must not change under the narrator */
+	editButton->setEnabled(!recording);
+	openButton->setEnabled(!recording);
 }
 
 void Teleprompter::BiggerText()
@@ -410,6 +575,7 @@ void Teleprompter::ScrollStep()
 void Teleprompter::ChangeFontSize(int delta)
 {
 	fontSize = std::clamp(fontSize + delta, kMinFontSize, kMaxFontSize);
+	ScriptMarkup::RestyleAll(textView->document(), fontSize);
 	ApplyReadingStyle();
 }
 

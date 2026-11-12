@@ -187,6 +187,8 @@ static inline void ClearProcessPriority()
 
 class Teleprompter;
 class TakesPanel;
+class RecordButton;
+class PanelGrip;
 class NarratorSession;
 class MicrophoneButton;
 class AudioFilterOrder;
@@ -1025,6 +1027,20 @@ private:
 	void ApplyAudioOnlyCentralArea(bool audioOnly);
 	void CreateAudioOnlyWorkspace(QBoxLayout *centralLayout);
 	void CreateAudioOnlyShortcuts();
+	void CreateTakesToggle();
+	QPointer<QPushButton> takesToggle;
+	/* the compact bar: record button, "⋯" entries and the Mixer toggle */
+	void CreateCompactBar();
+	void ShowBottomPanels(bool show);
+	void CreatePanelsToggle();
+	QPointer<RecordButton> recordButton;
+	QPointer<QPushButton> panelsToggle;
+	/* drag it up to open the mixer and controls, down to close them */
+	void CreatePanelGrip(QBoxLayout *centralLayout);
+	void ResizeBottomPanels(int height);
+	QPointer<PanelGrip> panelGrip;
+	int gripStartHeight = 0;
+	bool gripDragging = false;
 	void ToggleRecordingFromShortcut();
 
 	bool LowDiskSpace();
