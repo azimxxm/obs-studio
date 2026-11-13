@@ -93,6 +93,7 @@ private:
 
 	QPointer<QLabel> advOutRecWarning;
 	QPointer<QLabel> simpleOutRecWarning;
+	QPointer<QComboBox> appModeCombo;
 
 	QString curPreset;
 	QString curQSVPreset;
@@ -418,6 +419,7 @@ private slots:
 
 	void SimpleRecordingQualityChanged();
 	void UpdateAudioOnlySettingsPages();
+	void SetupAppModeSelector();
 	void SimpleRecordingAudioHintChanged();
 	void SimpleRecordingEncoderChanged();
 	void SimpleRecordingQualityLosslessWarning(int idx);

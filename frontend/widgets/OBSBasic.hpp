@@ -1011,6 +1011,8 @@ private:
 	bool isRecordingPausable = false;
 	bool recordingPaused = false;
 	bool audioOnlyLayoutActive = false;
+	bool audioOnlyLayoutApplied = false;
+	void ApplyAudioOnlyMenus(bool audioOnly);
 	QPointer<Teleprompter> teleprompter;
 	QPointer<TakesPanel> takesPanel;
 	QPointer<NarratorSession> narrator;

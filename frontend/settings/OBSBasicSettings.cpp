@@ -756,6 +756,7 @@ OBSBasicSettings::OBSBasicSettings(QWidget *parent)
 	connect(ui->channelSetup, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::SurroundWarning);
 	connect(ui->channelSetup, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::SpeakerLayoutChanged);
 	connect(ui->lowLatencyBuffering, &QCheckBox::clicked, this, &OBSBasicSettings::LowLatencyBufferingChanged);
+	SetupAppModeSelector();
 	connect(ui->simpleOutRecMode, &QComboBox::currentIndexChanged, this,
 		&OBSBasicSettings::SimpleRecordingQualityChanged);
 	connect(ui->simpleOutRecAudioFormat, &QComboBox::currentIndexChanged, this,
@@ -5567,6 +5568,45 @@ void OBSBasicSettings::SimpleRecordingEncoderChanged()
 	ui->simpleOutInfoLayout->addWidget(simpleOutRecWarning);
 }
 
+/* The app mode lives at the top of the General page: "Video and Audio" is plain
+ * OBS (recording and streaming), "Audio Only" turns the app into a narrator
+ * studio. It is a front for SimpleOutput/RecMode, so saving stays in one place:
+ * the hidden Recording Mode combo on the Output page. */
+void OBSBasicSettings::SetupAppModeSelector()
+{
+	auto *box = new QGroupBox(QTStr("Basic.Settings.General.AppMode"), ui->generalPage);
+	auto *form = new QFormLayout(box);
+	form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+	form->setLabelAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+	appModeCombo = new QComboBox(box);
+	appModeCombo->addItem(QTStr("Basic.Settings.General.AppMode.Video"), QString("Video"));
+	appModeCombo->addItem(QTStr("Basic.Settings.General.AppMode.Audio"), QString("Audio"));
+	auto *label = new QLabel(QTStr("Basic.Settings.General.AppMode.Label"), box);
+	label->setBuddy(appModeCombo);
+	form->addRow(label, appModeCombo);
+
+	auto *hint = new QLabel(QTStr("Basic.Settings.General.AppMode.Hint"), box);
+	hint->setWordWrap(true);
+	hint->setProperty("class", "text-muted");
+	form->addRow(nullptr, hint);
+
+	ui->verticalLayout_20->insertWidget(0, box);
+
+	/* the Output page keeps the combo for saving, but the choice is made here */
+	ui->simpleOutRecMode->setVisible(false);
+	ui->simpleOutRecModeLabel->setVisible(false);
+
+	connect(appModeCombo, &QComboBox::currentIndexChanged, this, [this]() {
+		bool audioOnly = appModeCombo->currentData().toString() == "Audio";
+		if (audioOnly && ui->outputMode->currentIndex() != 0) {
+			ui->outputMode->setCurrentIndex(0);
+		}
+		ui->simpleOutRecMode->setCurrentIndex(ui->simpleOutRecMode->findData(audioOnly ? "Audio" : "Video"));
+		UpdateAudioOnlySettingsPages();
+	});
+}
+
 /* In audio-only mode the streaming, video and scene settings only get in the
  * way, so they are hidden; switching back to Video shows everything again. */
 void OBSBasicSettings::UpdateAudioOnlySettingsPages()
@@ -5574,9 +5614,24 @@ void OBSBasicSettings::UpdateAudioOnlySettingsPages()
 	bool simple = ui->outputMode->currentIndex() == 0;
 	bool audioOnly = simple && ui->simpleOutRecMode->currentData().toString() == "Audio";
 
+	if (appModeCombo) {
+		QSignalBlocker blocker(appModeCombo);
+		appModeCombo->setCurrentIndex(appModeCombo->findData(audioOnly ? "Audio" : "Video"));
+	}
+
 	ui->listWidget->item(Pages::STREAM)->setHidden(audioOnly);
 	ui->listWidget->item(Pages::VIDEO)->setHidden(audioOnly);
 	ui->simpleStreamingGroupBox->setVisible(!audioOnly);
+
+	/* audio mode needs Simple output, so the Simple / Advanced switch goes away */
+	ui->outputMode->setVisible(!audioOnly);
+	ui->outputModeLabel->setVisible(!audioOnly);
+
+	/* Advanced page: video renderer, stream delay, reconnect and network are for video */
+	for (QWidget *box : {static_cast<QWidget *>(ui->advancedVideoContainer), static_cast<QWidget *>(ui->groupBox_5),
+			     static_cast<QWidget *>(ui->groupBox_7), static_cast<QWidget *>(ui->advNetworkGroupBox)}) {
+		box->setVisible(!audioOnly);
+	}
 
 	/* General page: snapping, projectors, studio mode and multiview are for video */
 	for (QWidget *box : {static_cast<QWidget *>(ui->groupBox_10), static_cast<QWidget *>(ui->groupBox_14),

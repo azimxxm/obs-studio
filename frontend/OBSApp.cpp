@@ -1411,7 +1411,9 @@ bool OBSApp::IsPortableMode()
 
 bool OBSApp::IsUpdaterDisabled()
 {
-	return opt_disable_updater;
+	/* Narrator Studio has no update feed of its own; OBS' updater would replace
+	 * it with the official OBS build, so it never runs. */
+	return true;
 }
 
 bool OBSApp::IsMissingFilesCheckDisabled()

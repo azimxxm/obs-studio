@@ -75,39 +75,66 @@ void OBSBasic::SelectAudioOnlyMicrophone()
 }
 
 /* Docks and the mixer orientation are saved before entering audio-only mode
- * and restored when leaving it, so Video mode looks exactly like before. */
+ * and restored when leaving it, so Video mode looks exactly like before.
+ * "Active" survives restarts: an app that starts in audio mode must not save its
+ * own hidden docks as the video layout, and one that starts in video mode after
+ * an audio session must get the video layout back. */
 void OBSBasic::ApplyAudioOnlyDocks(bool audioOnly)
 {
 	config_t *appConfig = App()->GetUserConfig();
 	const char *section = "AudioOnlyLayout";
+	bool audioLayoutWasActive = config_get_bool(appConfig, section, "Active");
 
 	if (audioOnly) {
-		config_set_bool(appConfig, section, "ScenesDockVisible", ui->scenesDock->isVisible());
-		config_set_bool(appConfig, section, "SourcesDockVisible", ui->sourcesDock->isVisible());
-		config_set_bool(appConfig, section, "TransitionsDockVisible", ui->transitionsDock->isVisible());
-		config_set_bool(appConfig, section, "VerticalVolumeControl",
-				config_get_bool(appConfig, "BasicWindow", "VerticalVolumeControl"));
+		if (!audioLayoutWasActive) {
+			config_set_bool(appConfig, section, "ScenesDockVisible", ui->scenesDock->isVisible());
+			config_set_bool(appConfig, section, "SourcesDockVisible", ui->sourcesDock->isVisible());
+			config_set_bool(appConfig, section, "TransitionsDockVisible", ui->transitionsDock->isVisible());
+			config_set_bool(appConfig, section, "MixerDockVisible", ui->mixerDock->isVisible());
+			config_set_bool(appConfig, section, "ControlsDockVisible",
+					!controlsDock || controlsDock->isVisible());
+			config_set_bool(appConfig, section, "VerticalVolumeControl",
+					config_get_bool(appConfig, "BasicWindow", "VerticalVolumeControl"));
+		}
+		config_set_bool(appConfig, section, "Active", true);
+
+		ui->scenesDock->setVisible(false);
+		ui->sourcesDock->setVisible(false);
+		ui->transitionsDock->setVisible(false);
+
+		/* the mixer and the record controls are hidden in audio mode unless the narrator
+		 * asked for them (Mixer ⌘J) */
+		config_set_default_bool(appConfig, "AudioOnly", "BottomPanelsVisible", false);
+		ShowBottomPanels(config_get_bool(appConfig, "AudioOnly", "BottomPanelsVisible"));
 	} else {
-		config_set_default_bool(appConfig, section, "ScenesDockVisible", true);
-		config_set_default_bool(appConfig, section, "SourcesDockVisible", true);
-		config_set_default_bool(appConfig, section, "TransitionsDockVisible", true);
+		/* a video session that never was in audio mode keeps OBS' own dock state */
+		if (!audioLayoutWasActive) {
+			return;
+		}
+		config_set_bool(appConfig, section, "Active", false);
+
+		auto restore = [&](QWidget *dock, const char *key) {
+			config_set_default_bool(appConfig, section, key, true);
+			if (dock) {
+				dock->setVisible(config_get_bool(appConfig, section, key));
+			}
+		};
+		restore(ui->scenesDock, "ScenesDockVisible");
+		restore(ui->sourcesDock, "SourcesDockVisible");
+		restore(ui->transitionsDock, "TransitionsDockVisible");
+		restore(ui->mixerDock, "MixerDockVisible");
+		restore(controlsDock, "ControlsDockVisible");
 	}
 
-	ui->scenesDock->setVisible(!audioOnly && config_get_bool(appConfig, section, "ScenesDockVisible"));
-	ui->sourcesDock->setVisible(!audioOnly && config_get_bool(appConfig, section, "SourcesDockVisible"));
-	ui->transitionsDock->setVisible(!audioOnly && config_get_bool(appConfig, section, "TransitionsDockVisible"));
-
-	/* the mixer and the record controls are hidden in audio mode unless the narrator
-	 * asked for them (Mixer ⌘J); video mode always gets them back */
-	config_set_default_bool(appConfig, "AudioOnly", "BottomPanelsVisible", false);
-	ShowBottomPanels(!audioOnly || config_get_bool(appConfig, "AudioOnly", "BottomPanelsVisible"));
-
 	/* A wide horizontal meter is much easier to read for a narrator */
+	config_set_default_bool(appConfig, section, "VerticalVolumeControl",
+				config_get_bool(appConfig, "BasicWindow", "VerticalVolumeControl"));
 	bool vertical = audioOnly ? false : config_get_bool(appConfig, section, "VerticalVolumeControl");
 	if (vertical != config_get_bool(appConfig, "BasicWindow", "VerticalVolumeControl")) {
 		config_set_bool(appConfig, "BasicWindow", "VerticalVolumeControl", vertical);
 		emit userSettingChanged("BasicWindow", "VerticalVolumeControl");
 	}
+	config_save_safe(appConfig, "tmp", nullptr);
 }
 
 /* Teleprompter on the left, the list of recorded takes on the right. */
@@ -426,17 +453,49 @@ void OBSBasic::MoveMicrophoneBar(bool intoTeleprompter)
 	ui->contextContainer->setVisible(config_get_bool(App()->GetUserConfig(), "BasicWindow", "ShowContextToolbars"));
 }
 
+/* Menu entries that only make sense with a video canvas are hidden in audio
+ * mode; Video mode shows the full OBS menus again. */
+void OBSBasic::ApplyAudioOnlyMenus(bool audioOnly)
+{
+	QList<QAction *> videoActions{ui->sceneCollectionMenu->menuAction(),
+				      ui->transformMenu->menuAction(),
+				      ui->orderMenu->menuAction(),
+				      ui->scalingMenu->menuAction(),
+				      ui->actionLockPreview,
+				      ui->actionCopySource,
+				      ui->actionPasteRef,
+				      ui->actionPasteDup,
+				      ui->sceneListModeMenu->menuAction(),
+				      ui->multiviewProjectorMenu->menuAction(),
+				      ui->toggleListboxToolbars,
+				      ui->toggleContextBar,
+				      ui->toggleSourceIcons,
+				      ui->autoConfigure,
+				      ui->scenesDock->toggleViewAction(),
+				      ui->sourcesDock->toggleViewAction(),
+				      ui->transitionsDock->toggleViewAction()};
+	for (QAction *action : videoActions) {
+		if (action) {
+			action->setVisible(!audioOnly);
+		}
+	}
+}
+
 /* Audio-only mode hides everything a narrator doesn't need: the preview, scenes,
  * sources, transitions and the streaming / virtual camera / studio mode buttons. */
 void OBSBasic::UpdateAudioOnlyLayout()
 {
 	bool audioOnly = IsAudioOnlyMode();
-	if (audioOnly == audioOnlyLayoutActive) {
+	/* the first call (at startup) always runs, the window may still carry the
+	 * other mode's layout from the last session */
+	if (audioOnlyLayoutApplied && audioOnly == audioOnlyLayoutActive) {
 		return;
 	}
+	audioOnlyLayoutApplied = true;
 
 	ApplyAudioOnlyDocks(audioOnly);
 	ApplyAudioOnlyCentralArea(audioOnly);
+	ApplyAudioOnlyMenus(audioOnly);
 	if (audioOnly) {
 		SelectAudioOnlyMicrophone();
 	}

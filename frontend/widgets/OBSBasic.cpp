@@ -1226,6 +1226,7 @@ void OBSBasic::OBSInit()
 #if defined(_WIN32) || defined(__APPLE__)
 	if (App()->IsUpdaterDisabled()) {
 		ui->actionCheckForUpdates->setEnabled(false);
+		ui->actionCheckForUpdates->setVisible(false);
 #if defined(_WIN32)
 		ui->actionRepair->setEnabled(false);
 #endif
