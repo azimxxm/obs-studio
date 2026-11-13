@@ -85,6 +85,17 @@ void OBSBasic::ApplyAudioOnlyDocks(bool audioOnly)
 	const char *section = "AudioOnlyLayout";
 	bool audioLayoutWasActive = config_get_bool(appConfig, section, "Active");
 
+	/* builds before "Active" existed could save the hidden audio docks as the
+	 * video layout; throw those values away once and show OBS' docks again */
+	if (!config_has_user_value(appConfig, section, "Active") &&
+	    config_has_user_value(appConfig, section, "ScenesDockVisible")) {
+		config_remove_value(appConfig, section, "ScenesDockVisible");
+		config_remove_value(appConfig, section, "SourcesDockVisible");
+		config_remove_value(appConfig, section, "TransitionsDockVisible");
+		config_remove_value(appConfig, section, "VerticalVolumeControl");
+		audioLayoutWasActive = true;
+	}
+
 	if (audioOnly) {
 		if (!audioLayoutWasActive) {
 			config_set_bool(appConfig, section, "ScenesDockVisible", ui->scenesDock->isVisible());
@@ -165,11 +176,28 @@ void OBSBasic::CreateAudioOnlyWorkspace(QBoxLayout *centralLayout)
 
 	/* the countdown runs on top of the teleprompter; the text starts moving after it */
 	narrator = new NarratorSession(teleprompter, this);
-	connect(this, &OBSBasic::RecordingStarted, narrator, &NarratorSession::RecordingStarted);
-	connect(this, &OBSBasic::RecordingPaused, narrator, &NarratorSession::RecordingPaused);
-	connect(this, &OBSBasic::RecordingUnpaused, narrator, &NarratorSession::RecordingUnpaused);
-	connect(this, &OBSBasic::RecordingStopped, narrator,
-		[this]() { narrator->RecordingStopped(QString::fromStdString(outputHandler->lastRecordingPath)); });
+	/* the workspace stays alive after switching to Video mode; a video recording
+	 * must not get a countdown, mistake marks or a .narration.json next to it */
+	connect(this, &OBSBasic::RecordingStarted, narrator, [this]() {
+		if (audioOnlyLayoutActive) {
+			narrator->RecordingStarted();
+		}
+	});
+	connect(this, &OBSBasic::RecordingPaused, narrator, [this]() {
+		if (audioOnlyLayoutActive) {
+			narrator->RecordingPaused();
+		}
+	});
+	connect(this, &OBSBasic::RecordingUnpaused, narrator, [this]() {
+		if (audioOnlyLayoutActive) {
+			narrator->RecordingUnpaused();
+		}
+	});
+	connect(this, &OBSBasic::RecordingStopped, narrator, [this]() {
+		if (audioOnlyLayoutActive) {
+			narrator->RecordingStopped(QString::fromStdString(outputHandler->lastRecordingPath));
+		}
+	});
 	connect(narrator, &NarratorSession::SpeakNow, teleprompter, &Teleprompter::StartScrolling);
 	connect(narrator, &NarratorSession::VoiceActivityChanged, teleprompter, &Teleprompter::SetVoiceActive);
 
@@ -179,7 +207,11 @@ void OBSBasic::CreateAudioOnlyWorkspace(QBoxLayout *centralLayout)
 
 	/* don't play an old take into the microphone while recording a new one */
 	connect(this, &OBSBasic::RecordingStarted, takesPanel, &TakesPanel::StopPlayback);
-	connect(this, &OBSBasic::RecordingStopped, takesPanel, &TakesPanel::RefreshAfterRecording);
+	connect(this, &OBSBasic::RecordingStopped, takesPanel, [this]() {
+		if (audioOnlyLayoutActive) {
+			takesPanel->RefreshAfterRecording();
+		}
+	});
 }
 
 /* "Takes ⌘T" at the right end of the teleprompter's row shows or hides the
