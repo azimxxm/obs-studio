@@ -477,7 +477,7 @@ void OBSApp::FindThemes()
 	}
 
 	{
-		const std::string themeDir = App()->userConfigLocation.u8string() + "/obs-studio/themes";
+		const std::string themeDir = App()->userConfigLocation.u8string() + "/" APP_CONFIG_DIR "/themes";
 
 		QDirIterator it(QString::fromStdString(themeDir), filters, QDir::Files);
 

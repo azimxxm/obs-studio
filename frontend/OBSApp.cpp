@@ -16,6 +16,7 @@
 ******************************************************************************/
 
 #include "OBSApp.hpp"
+#include <utility/platform.hpp>
 
 #include <components/Multiview.hpp>
 #include <dialogs/LogUploadDialog.hpp>
@@ -46,6 +47,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 
 #ifdef _WIN32
@@ -488,9 +490,9 @@ static bool MakeUserDirs()
 	return true;
 }
 
-constexpr std::string_view OBSProfileSubDirectory = "obs-studio/basic/profiles";
-constexpr std::string_view OBSScenesSubDirectory = "obs-studio/basic/scenes";
-constexpr std::string_view OBSPluginManagerSubDirectory = "obs-studio/plugin_manager";
+constexpr std::string_view OBSProfileSubDirectory = APP_CONFIG_DIR "/basic/profiles";
+constexpr std::string_view OBSScenesSubDirectory = APP_CONFIG_DIR "/basic/scenes";
+constexpr std::string_view OBSPluginManagerSubDirectory = APP_CONFIG_DIR "/plugin_manager";
 
 static bool MakeUserProfileDirs()
 {
@@ -643,7 +645,7 @@ bool OBSApp::InitGlobalConfig()
 
 bool OBSApp::InitUserConfig(std::filesystem::path &userConfigLocation, uint32_t lastVersion)
 {
-	const std::string userConfigFile = userConfigLocation.u8string() + "/obs-studio/user.ini";
+	const std::string userConfigFile = userConfigLocation.u8string() + "/" APP_CONFIG_DIR "/user.ini";
 
 	int errorCode = userConfig.Open(userConfigFile.c_str(), CONFIG_OPEN_ALWAYS);
 
@@ -726,8 +728,8 @@ void OBSApp::MigrateLegacySettings(const uint32_t lastVersion)
 	}
 }
 
-static constexpr string_view OBSGlobalIniPath = "/obs-studio/global.ini";
-static constexpr string_view OBSUserIniPath = "/obs-studio/user.ini";
+static constexpr string_view OBSGlobalIniPath = "/" APP_CONFIG_DIR "/global.ini";
+static constexpr string_view OBSUserIniPath = "/" APP_CONFIG_DIR "/user.ini";
 
 bool OBSApp::MigrateGlobalSettings()
 {
@@ -1038,7 +1040,7 @@ static void move_basic_to_profiles(void)
 	}
 
 	const std::filesystem::path profilesPath =
-		App()->userProfilesLocation / std::filesystem::u8path("obs-studio/basic/profiles");
+		App()->userProfilesLocation / std::filesystem::u8path(APP_CONFIG_DIR "/basic/profiles");
 
 	if (std::filesystem::exists(profilesPath)) {
 		return;
@@ -1102,7 +1104,7 @@ static void move_basic_to_scene_collections(void)
 	}
 
 	const std::filesystem::path sceneCollectionPath =
-		App()->userScenesLocation / std::filesystem::u8path("obs-studio/basic/scenes");
+		App()->userScenesLocation / std::filesystem::u8path(APP_CONFIG_DIR "/basic/scenes");
 
 	if (std::filesystem::exists(sceneCollectionPath)) {
 		return;
@@ -1775,6 +1777,35 @@ vector<pair<string, string>> GetLocaleNames()
 /* Narrator Studio keeps its settings apart from the official OBS Studio:
  * "obs-studio/..." becomes "narrator-studio/...". The first time, the OBS
  * settings are copied over so nothing the user set up gets lost. */
+/* Builds up to 1.1.0 kept user.ini, profiles, scenes and themes in the OBS
+ * folder by mistake (only global.ini and logs went to our own). Those are the
+ * settings the user really works with, so they are copied over once. */
+static void MoveNarratorSettingsOnce(const std::filesystem::path &oldDir, const std::filesystem::path &newDir)
+{
+	std::error_code error;
+	const std::filesystem::path marker = newDir / ".settings-moved";
+	if (std::filesystem::exists(marker, error) || !std::filesystem::exists(oldDir, error)) {
+		return;
+	}
+	std::filesystem::create_directories(newDir, error);
+
+	const auto options = std::filesystem::copy_options::recursive |
+			     std::filesystem::copy_options::overwrite_existing;
+	for (const char *item : {"user.ini", "basic", "themes", "plugin_manager"}) {
+		const std::filesystem::path from = oldDir / item;
+		if (!std::filesystem::exists(from, error)) {
+			continue;
+		}
+		std::filesystem::copy(from, newDir / item, options, error);
+		if (error) {
+			blog(LOG_WARNING, "Could not copy %s from the OBS settings: %s", item,
+			     error.message().c_str());
+			return;
+		}
+	}
+	std::ofstream(marker.u8string()) << "settings copied from obs-studio\n";
+}
+
 static std::string NarratorConfigName(const char *name)
 {
 	static const std::string obsPrefix = "obs-studio";
@@ -1798,6 +1829,7 @@ static std::string NarratorConfigName(const char *name)
 					blog(LOG_WARNING, "Could not copy OBS settings: %s", error.message().c_str());
 				}
 			}
+			MoveNarratorSettingsOnce(std::filesystem::u8path(oldDir), std::filesystem::u8path(newDir));
 		}
 	}
 	return mapped;

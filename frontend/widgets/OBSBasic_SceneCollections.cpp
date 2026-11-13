@@ -16,6 +16,7 @@
 ******************************************************************************/
 
 #include "OBSBasic.hpp"
+#include <utility/platform.hpp>
 
 #include <dialogs/OBSMissingFiles.hpp>
 #include <importer/OBSImporter.hpp>
@@ -42,7 +43,7 @@ using SceneCollection = OBS::SceneCollection;
 
 // MARK: Constant Expressions
 
-static constexpr std::string_view SceneCollectionPath = "/obs-studio/basic/scenes/";
+static constexpr std::string_view SceneCollectionPath = "/" APP_CONFIG_DIR "/basic/scenes/";
 
 namespace DataKeys {
 static constexpr std::string_view AbsoluteCoordinates = "AbsoluteCoordinates";

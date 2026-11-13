@@ -19,6 +19,14 @@
 
 #include <util/c99defs.h>
 
+/* Folder name for settings, profiles and scenes under the user's config path.
+ * Narrator Studio keeps its own so it never touches the official OBS settings. */
+#ifdef NARRATOR_CONFIG_DIR
+#define APP_CONFIG_DIR NARRATOR_CONFIG_DIR
+#else
+#define APP_CONFIG_DIR "obs-studio"
+#endif
+
 #include <string>
 #include <vector>
 

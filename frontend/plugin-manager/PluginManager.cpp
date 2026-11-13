@@ -16,6 +16,7 @@
 ******************************************************************************/
 
 #include "PluginManager.hpp"
+#include <utility/platform.hpp>
 #include "PluginManagerWindow.hpp"
 
 #include <OBSApp.hpp>
@@ -62,7 +63,7 @@ void addModuleToPluginManagerImpl(void *param, obs_module_t *newModule)
 	}
 }
 
-constexpr std::string_view OBSPluginManagerPath = "obs-studio/plugin_manager";
+constexpr std::string_view OBSPluginManagerPath = APP_CONFIG_DIR "/plugin_manager";
 constexpr std::string_view OBSPluginManagerModulesFile = "modules.json";
 
 void PluginManager::preLoad()

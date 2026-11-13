@@ -18,6 +18,7 @@
 ******************************************************************************/
 
 #include "OBSBasic.hpp"
+#include <utility/platform.hpp>
 #include "OBSBasicStats.hpp"
 
 #include <dialogs/LogUploadDialog.hpp>
@@ -463,7 +464,7 @@ void OBSBasic::on_actionReleaseNotes_triggered()
 
 void OBSBasic::on_actionShowSettingsFolder_triggered()
 {
-	const std::string userConfigPath = App()->userConfigLocation.u8string() + "/obs-studio";
+	const std::string userConfigPath = App()->userConfigLocation.u8string() + "/" APP_CONFIG_DIR;
 	const QString userConfigLocation = QString::fromStdString(userConfigPath);
 
 	QDesktopServices::openUrl(QUrl::fromLocalFile(userConfigLocation));

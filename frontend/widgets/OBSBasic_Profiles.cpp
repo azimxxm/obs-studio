@@ -16,6 +16,7 @@
 ******************************************************************************/
 
 #include "OBSBasic.hpp"
+#include <utility/platform.hpp>
 
 #ifdef YOUTUBE_ENABLED
 #include <docks/YouTubeAppDock.hpp>
@@ -32,7 +33,7 @@
 
 // MARK: Constant Expressions
 
-constexpr std::string_view OBSProfilePath = "/obs-studio/basic/profiles/";
+constexpr std::string_view OBSProfilePath = "/" APP_CONFIG_DIR "/basic/profiles/";
 constexpr std::string_view OBSProfileSettingsFile = "basic.ini";
 
 // MARK: Forward Declarations
